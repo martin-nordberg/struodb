@@ -11,12 +11,13 @@ import lang/ast.{
 }
 import lang/lexer
 import lang/parser.{ExplicitNotNull, MissingGeneratedStorage, UnexpectedToken}
+import lang/token_stream
 
 //-----------------------------------------------------------------------------
 
 fn parse(source: String) -> Result(ast.Statement, parser.ParseError) {
   let assert Ok(tokens) = lexer.tokenize(source)
-  parser.parse(tokens)
+  parser.parse(token_stream.new(tokens))
 }
 
 fn parse_ok(source: String) -> ast.Statement {

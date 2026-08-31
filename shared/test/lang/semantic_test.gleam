@@ -8,6 +8,7 @@ import lang/lexer
 import lang/parser
 import lang/semantic
 import lang/token
+import lang/token_stream
 
 //-----------------------------------------------------------------------------
 // Test helpers — ASTs built directly (not via the parser), to keep these
@@ -67,7 +68,7 @@ fn insert(
 
 fn parse_source(source: String) -> ast.Statement {
   let assert Ok(tokens) = lexer.tokenize(source)
-  let assert Ok(stmt) = parser.parse(tokens)
+  let assert Ok(stmt) = parser.parse(token_stream.new(tokens))
   stmt
 }
 
