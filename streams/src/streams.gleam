@@ -28,33 +28,35 @@ pub fn main() {
 
   let writer = writer.start(io.println)
   let dispatcher =
-  dispatcher.start(
-  writer,
-  input_handler,
-  max_idle_worker_count,
-  max_worker_count,
-  )
+    dispatcher.start(
+      writer,
+      input_handler,
+      max_idle_worker_count,
+      max_worker_count,
+    )
 
   reader.read_loop(dispatcher, fn() { in.read_line() })
+
+  writer.stop(writer)
 }
 
 /// The current wall-clock time in milliseconds since the Unix epoch, for
 /// use as the clock actor's injected `now`.
 fn system_now_ms() -> Int {
   let #(seconds, nanoseconds) =
-  timestamp.system_time() |> timestamp.to_unix_seconds_and_nanoseconds
+    timestamp.system_time() |> timestamp.to_unix_seconds_and_nanoseconds
   seconds * 1000 + nanoseconds / 1_000_000
 }
 
 fn configure_logging() {
   let async_json_stderr =
-  json.handler_stderr()
-  |> async.make_async(async.config())
+    json.handler_stderr()
+    |> async.make_async(async.config())
 
   log.configure([
-  log.config_level(level.Debug),
-  log.config_handlers([async_json_stderr]),
-  log.config_context([#("app", "exstruo"), #("env", "dev")]),
+    log.config_level(level.Debug),
+    log.config_handlers([async_json_stderr]),
+    log.config_context([#("app", "exstruo"), #("env", "dev")]),
   ])
 
   log.info("Logging configured")

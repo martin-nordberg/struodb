@@ -1,5 +1,10 @@
 import asyncio/messages.{type WriterMessage, StopWriter, WriteOutput}
+import gleam/erlang/process.{type Subject}
 import gleam/otp/actor
+
+//-----------------------------------------------------------------------------
+
+const call_timeout_ms = 1000
 
 //-----------------------------------------------------------------------------
 
@@ -13,6 +18,24 @@ pub fn start(write_output: fn(String) -> Nil) {
     |> actor.start()
 
   writer_started.data
+}
+
+/// Stops the writer actor, blocking until it has actually finished exiting
+/// (or up to `call_timeout_ms`, whichever comes first).
+pub fn stop(writer: Subject(WriterMessage)) -> Nil {
+  case process.subject_owner(writer) {
+    Ok(pid) -> {
+      let monitor = process.monitor(pid)
+      actor.send(writer, StopWriter)
+      let assert Ok(_down) =
+        process.new_selector()
+        |> process.select_specific_monitor(monitor, fn(down) { down })
+        |> process.selector_receive(call_timeout_ms)
+      Nil
+    }
+    // No owning process to wait on (subject already invalid) — nothing to do.
+    Error(Nil) -> Nil
+  }
 }
 
 //-----------------------------------------------------------------------------
