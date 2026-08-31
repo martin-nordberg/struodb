@@ -20,7 +20,8 @@ fn fixed_clock() -> fn() -> Int {
 //-----------------------------------------------------------------------------
 
 pub fn start_with_a_valid_node_id_succeeds_test() {
-  let assert Ok(_clock) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  clock.stop(subject)
 }
 
 pub fn start_rejects_a_node_id_of_the_wrong_length_test() {
@@ -42,6 +43,7 @@ pub fn consecutive_next_calls_strictly_increase_test() {
   let second = clock.next(subject)
 
   assert string.compare(first, second) == order.Lt
+  clock.stop(subject)
 }
 
 pub fn rollover_advances_time_and_resets_counter_test() {
@@ -72,6 +74,7 @@ pub fn rollover_advances_time_and_resets_counter_test() {
 
   assert string.compare(before_time, after_time) == order.Lt
   assert after_counter == "00"
+  clock.stop(subject)
 }
 
 pub fn merge_with_an_older_remote_value_increments_the_local_counter_test() {
@@ -85,6 +88,7 @@ pub fn merge_with_an_older_remote_value_increments_the_local_counter_test() {
   assert merged_time == fixed_now
   assert merged_counter == 1
   assert string.slice(merged, 10, 5) == node_id
+  clock.stop(subject)
 }
 
 pub fn merge_with_a_newer_remote_value_adopts_remote_time_test() {
@@ -99,6 +103,7 @@ pub fn merge_with_a_newer_remote_value_adopts_remote_time_test() {
   assert merged_time == fixed_now + 5000
   assert merged_counter == remote_counter + 1
   assert string.slice(merged, 10, 5) == node_id
+  clock.stop(subject)
 }
 
 pub fn merge_at_equal_times_combines_counters_with_max_test() {
@@ -120,6 +125,7 @@ pub fn merge_at_equal_times_combines_counters_with_max_test() {
 
   assert merged_time == fixed_now
   assert merged_counter == int.max(local_counter, remote_counter) + 1
+  clock.stop(subject)
 }
 
 pub fn merge_rolls_over_the_same_way_next_does_test() {
@@ -132,6 +138,7 @@ pub fn merge_rolls_over_the_same_way_next_does_test() {
 
   assert merged_time == fixed_now + 1
   assert merged_counter == 0
+  clock.stop(subject)
 }
 
 pub fn merge_rejects_a_malformed_remote_value_and_leaves_state_unchanged_test() {
@@ -143,6 +150,7 @@ pub fn merge_rejects_a_malformed_remote_value_and_leaves_state_unchanged_test() 
   let first = clock.next(subject)
   let second = clock.next(subject)
   assert string.compare(first, second) == order.Lt
+  clock.stop(subject)
 }
 
 pub fn stop_clock_terminates_the_actor_test() {

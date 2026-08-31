@@ -85,9 +85,22 @@ pub fn merge(
   })
 }
 
-/// Stops the clock actor.
+/// Stops the clock actor, blocking until it has actually finished exiting
+/// (or up to `call_timeout_ms`, whichever comes first).
 pub fn stop(clock: Subject(ClockMessage)) -> Nil {
-  actor.send(clock, StopClock)
+  case process.subject_owner(clock) {
+    Ok(pid) -> {
+      let monitor = process.monitor(pid)
+      actor.send(clock, StopClock)
+      let assert Ok(_down) =
+        process.new_selector()
+        |> process.select_specific_monitor(monitor, fn(down) { down })
+        |> process.selector_receive(call_timeout_ms)
+      Nil
+    }
+    // No owning process to wait on (subject already invalid) — nothing to do.
+    Error(Nil) -> Nil
+  }
 }
 
 //-----------------------------------------------------------------------------
