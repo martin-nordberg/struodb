@@ -1,5 +1,5 @@
 //-----------------------------------------------------------------------------
-// Pure data: lexical tokens for Exstruo source text (spec.md Part I). No
+// Pure data: lexical tokens for StruoDB source text (spec.md Part I). No
 // logic beyond the structural equality Gleam gives records/unions for free
 // — see lexer.gleam for the scanner that produces these.
 //-----------------------------------------------------------------------------

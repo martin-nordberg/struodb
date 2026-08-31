@@ -56,7 +56,7 @@ fn configure_logging() {
   log.configure([
     log.config_level(level.Debug),
     log.config_handlers([async_json_stderr]),
-    log.config_context([#("app", "exstruo"), #("env", "dev")]),
+    log.config_context([#("app", "StruoDB"), #("env", "dev")]),
   ])
 
   log.info("Logging configured")

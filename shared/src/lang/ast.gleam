@@ -2,7 +2,7 @@ import gleam/option.{type Option}
 import lang/token.{type Span}
 
 //-----------------------------------------------------------------------------
-// Pure data: the parsed shape of Exstruo source text (spec.md Part II).
+// Pure data: the parsed shape of StruoDB source text (spec.md Part II).
 // No logic here — see parser.gleam for what builds these, catalog.gleam
 // for what a validated `Statement` does to a stream's declared shape, and
 // semantic.gleam for the checks a `Statement` must pass first.
