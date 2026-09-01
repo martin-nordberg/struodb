@@ -1,8 +1,8 @@
 import gleam/list
 import gleam/string
 import lang/lexer.{
-  InvalidDigitGroupSeparator, UnknownCharacter, UnterminatedBlockComment,
-  UnterminatedQuotedIdentifier, UnterminatedString,
+  InvalidDigitGroupSeparator, ReservedWord, UnknownCharacter,
+  UnterminatedBlockComment, UnterminatedQuotedIdentifier, UnterminatedString,
 }
 import lang/token.{
   Amp, Arrow, ArrowText, Cast, Comma, Concat, ContainedBy, Contains, Dot, Eq, Ge,
@@ -72,6 +72,52 @@ pub fn long_unquoted_identifier_is_not_truncated_test() {
 pub fn long_quoted_identifier_is_not_truncated_test() {
   let long_name = string.repeat("A", 80)
   assert kinds("\"" <> long_name <> "\"") == [QuotedIdentifier(long_name)]
+}
+
+//-----------------------------------------------------------------------------
+// PostgreSQL reserved words (spec.md §3.5)
+//-----------------------------------------------------------------------------
+
+pub fn an_unquoted_postgres_reserved_word_is_rejected_test() {
+  // One from each rough source: a plain SQL reserved word (`select`), a
+  // reserved word that's specifically "(can be function or type name)"
+  // rather than plainly reserved (`table`), and a multi-word one
+  // (`current_timestamp`).
+  let assert ReservedWord(word: "select", at: _) = lex_error("select")
+  let assert ReservedWord(word: "table", at: _) = lex_error("table")
+  let assert ReservedWord(word: "current_timestamp", at: _) =
+    lex_error("current_timestamp")
+}
+
+pub fn the_reserved_word_check_applies_case_insensitively_test() {
+  // Same folding rule as keywords/identifiers (§1) — matching case
+  // doesn't let a reserved word slip through.
+  let assert ReservedWord(word: "select", at: _) = lex_error("SELECT")
+  let assert ReservedWord(word: "select", at: _) = lex_error("Select")
+}
+
+pub fn a_struodb_keyword_that_is_also_postgres_reserved_lexes_as_the_keyword_test() {
+  // `create`/`check`/`not` are both a StruoDB keyword (§3) and a
+  // PostgreSQL reserved word — StruoDB's own lookup runs first, so these
+  // still tokenize as `Keyword`, not `ReservedWord`; §3 already made them
+  // unusable as identifiers before §3.5 existed.
+  assert kinds("create") == [Keyword(KwCreate)]
+  assert kinds("check") == [Keyword(token.KwCheck)]
+  assert kinds("not") == [Keyword(token.KwNot)]
+}
+
+pub fn a_postgres_non_reserved_word_still_lexes_as_a_plain_identifier_test() {
+  // `value` is a PostgreSQL keyword, but only "non-reserved" — not in
+  // §3.5's list, and not one of StruoDB's own keywords either, so it's
+  // still a perfectly ordinary identifier.
+  assert kinds("value") == [Identifier("value")]
+}
+
+pub fn quoting_a_reserved_word_still_works_test() {
+  // §2/§3.5: quoting is exactly the escape hatch this restriction exists
+  // to require — it doesn't make reserved words unusable, only their
+  // unquoted spelling.
+  assert kinds("\"select\"") == [QuotedIdentifier("select")]
 }
 
 //-----------------------------------------------------------------------------

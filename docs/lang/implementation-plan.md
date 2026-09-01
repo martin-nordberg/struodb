@@ -309,6 +309,7 @@ pub type LexError {
   UnterminatedBlockComment(at: Position)
   UnterminatedQuotedIdentifier(at: Position)
   InvalidDigitGroupSeparator(at: Position)  // leading/trailing/doubled `_`, or adjacent to `.`/exponent — §4.2
+  ReservedWord(word: String, at: Position)  // unquoted, matches one of PostgreSQL's own reserved words — §3.5
   UnknownCharacter(char: String, at: Position)
 }
 
@@ -355,8 +356,13 @@ Per iteration, in this order:
    a `Dict(String, Keyword)` built once from a literal list — same
    "avoid an ad hoc `Dict` built per call" reasoning `base62.gleam`
    already documents for its capacity table, so prefer the `case`/literal
-   list form here too). A hit emits `Keyword(...)`; a miss emits
-   `Identifier(name: ...)` holding the full folded text, untruncated.
+   list form here too). A hit emits `Keyword(...)`. A miss falls through
+   to a second lookup, against a separate table of PostgreSQL's own
+   reserved words (§3.5, same `case`-over-literals style) — a hit there
+   is `ReservedWord`, not an `Identifier`; only a miss against *both*
+   tables emits `Identifier(name: ...)` holding the full folded text,
+   untruncated. See "PostgreSQL reserved words" below for why this
+   second table exists.
 5. **Number** (starts with a digit, or `.` followed by a digit, §4.2):
    consume the integer part (digits and `_` separators), optionally a
    `.` and fractional digits, optionally an exponent (`[eE][+-]?digits`).
@@ -397,6 +403,49 @@ time, so an approximate (codepoint-boundary, not necessarily
 byte-boundary-identical) truncation is good enough — a mismatch on a
 genuinely rare edge case just means PostgreSQL reports it instead of
 StruoDB, not that the transpiled program is wrong.
+
+### PostgreSQL reserved words
+
+Added after the rest of this plan was already built, directly motivated
+by `codegen-plan.md`'s "Generated identifiers are always double-quoted"
+design decision: that decision defaulted to always-quoting specifically
+because a content-based quoting check (quote only if the string looks
+like it needed quoting — uppercase, special characters, a leading digit)
+can't by itself tell that a perfectly normal-looking string like `order`
+is a PostgreSQL reserved word and still needs quoting. Codegen still
+needs that reserved-word check — rejecting it at the lexer doesn't make
+codegen's own check optional, since a StruoDB source can still
+*deliberately* quote a reserved word as an identifier (`"order"`), which
+reaches codegen indistinguishable from an ordinary name. What rejecting
+it at the lexer actually fixes is *where the reserved-word list itself
+comes from*: instead of codegen needing its own separately-sourced copy,
+this table (below) is now the single, canonical, already-implemented
+list — codegen reuses it (or an equivalent moved somewhere both can
+reach) directly. See `codegen-plan.md`'s own "Design decisions" and
+"Issues" for where this was previously flagged as unresolved, and for
+the corrected framing.
+
+The word list itself (§3.5) is PostgreSQL's own **reserved** and
+**reserved (can be function or type name)** keyword categories — sourced
+from
+[sql-keywords-appendix](https://www.postgresql.org/docs/current/sql-keywords-appendix.html)'s
+"PostgreSQL" column, as of PostgreSQL 18, 101 words — deliberately
+excluding PostgreSQL's own "non-reserved" keywords (e.g. `value`,
+`type`), which PostgreSQL itself allows unquoted in identifier position.
+Checked only *after* StruoDB's own keyword table already misses (step 4
+above), so a word that's both a StruoDB keyword and PostgreSQL-reserved
+(`create`, `not`, `check`, ...) is unaffected — it was already rejected
+as an identifier by §3, for an unrelated reason, before this table is
+ever consulted. Quoting (§2) is the escape hatch either way; this
+restriction only ever affects the *unquoted* spelling.
+
+This word list is a point-in-time snapshot, not derived at build or run
+time from a live PostgreSQL installation (`pg_get_keywords()`, which
+`codegen-plan.md`'s "Issues" section raised as one option) — simpler,
+and sufficient here: StruoDB targets a specific PostgreSQL major version
+range in practice, and a version-to-version change to this list would be
+a rare, deliberate update to both this table and spec.md §3.5 together,
+not something worth generating dynamically.
 
 ---
 
@@ -1279,6 +1328,15 @@ coupled to one:
   `|`/`||`, `~`/`~*`, `!=`/`!~`/`!~*`).
 - `UnknownCharacter` on an input character outside every recognized
   form (e.g. `$`, `@` on its own, a stray backslash).
+- An unquoted PostgreSQL reserved word (§3.5) is rejected as
+  `ReservedWord`, case-insensitively, for one plainly-reserved example
+  (`select`), one "(can be function or type name)" example (`table`),
+  and one multi-word example (`current_timestamp`); a StruoDB keyword
+  that's also PostgreSQL-reserved (`create`, `check`, `not`) still
+  tokenizes as `Keyword`, not `ReservedWord`, proving StruoDB's own
+  keyword table is checked first; a PostgreSQL keyword that's only
+  *non*-reserved (`value`) still tokenizes as a plain `Identifier`;
+  quoting a reserved word (`"select"`) still works.
 
 ### `shared/test/lang/catalog_test.gleam`
 

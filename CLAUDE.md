@@ -140,6 +140,14 @@ never changes one, since an `INSERT` never alters a stream's shape.
 - `token.gleam` / `lexer.gleam` (shared) — lexical layer: keywords are
   case-insensitive, unquoted identifiers fold to lower case, quoted
   identifiers (`"..."`) are case-sensitive, matching PostgreSQL convention.
+  An unquoted identifier matching one of PostgreSQL's own reserved
+  keywords (spec.md §3.5, ~101 words) is rejected at the lexer as
+  `ReservedWord` rather than accepted as an `Identifier` — this is what
+  lets a future codegen stage emit unquoted identifiers by default
+  (content-based quoting only) instead of always-quoting, since no
+  unquoted source identifier can ever collide with a PostgreSQL reserved
+  word; see `docs/lang/codegen-plan.md`'s identifier-quoting design
+  decision.
 - `expr_ast.gleam` / `expr_parser.gleam` (shared) — expressions,
   `data_type` (spec.md §8–§9.1), and `GeneratedClause`/`NamedCheck` (§9.1,
   §9.5 — small wrappers around an `Expr` that both `ddl_ast.gleam`, as

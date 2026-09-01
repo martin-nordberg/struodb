@@ -84,30 +84,44 @@ parser/semantics.
   stream whose `CREATE STREAM` just failed). So codegen's driver reports
   exactly one statement's worth of `SemanticError`s per failed run, along
   with which statement (0-indexed) it was.
-- **Generated identifiers are always double-quoted.** `ddl_ast.gleam`'s/
-  `dml_ast.gleam`'s name fields (`CreateStream.name`/`AlterStream.name`,
-  `Insert.stream_name`, `ColumnDef.name`, `NamedCheck.constraint_name`,
-  etc.) are plain `String` with no memory of whether the source spelled
-  them as a bare `Identifier` (already lower-cased by the lexer, §1) or a
-  case-preserving `QuotedIdentifier` — that distinction is genuinely gone
-  by the time an AST exists. The tempting fix, re-quote only when the
-  string's own content requires it (contains uppercase/non-`[a-z0-9_]`
-  characters, or starts with a digit), is *almost* sufficient — a
-  bare-source name is always already all-lowercase `[a-z_][a-z0-9_]*` by
-  construction, so it'd never be spuriously re-quoted, and a
-  quoted-source name needing quoting is exactly what that check catches
-  — except it can't know PostgreSQL's own reserved-word list (not tracked
-  anywhere in this codebase, and StruoDB's own reserved words, spec.md
-  §3, are a much smaller, different set that offers no help here). A
-  stream named `select` is completely legal, unquoted, StruoDB source
-  today, but `CREATE TABLE select (...)` is a PostgreSQL syntax error.
-  Always quoting sidesteps needing that list at all, at the cost of
-  slightly noisier output for the common all-lowercase case — flagged as
-  an open question below in case that trade is unwanted. Function-call
-  names are the one exception: emitted bare, lower-case, unquoted, since
-  today they're only ever one of a small, project-controlled set of
-  built-ins (§8.3), not arbitrary user-chosen identifiers, so the same
-  reserved-word concern doesn't apply.
+- **Generated identifiers are quoted only when needed — not
+  unconditionally — via a content check plus a reserved-word check.**
+  `ddl_ast.gleam`'s/`dml_ast.gleam`'s name fields (`CreateStream.name`/
+  `AlterStream.name`, `Insert.stream_name`, `ColumnDef.name`,
+  `NamedCheck.constraint_name`, etc.) are plain `String` with no memory
+  of whether the source spelled them as a bare `Identifier` (already
+  lower-cased by the lexer, §1) or a case-preserving `QuotedIdentifier`
+  — that distinction is genuinely gone by the time an AST exists, and
+  codegen has to re-derive "does this need quotes in the output" from
+  the string alone, regardless of which form produced it. Two checks,
+  both needed: (a) *content* — quote if the string contains uppercase/
+  non-`[a-z0-9_]` characters, or starts with a digit, since an unquoted
+  identifier can never contain those; (b) *reserved word* — quote if the
+  string is one of PostgreSQL's own reserved words (spec.md §3.5), since
+  PostgreSQL requires quoting those regardless of content. Neither check
+  alone is sufficient: a name could fail only (a) (`Sensor_Reading`), only
+  (b) (`order` — valid identifier characters throughout, but still
+  reserved), or neither (`sensor_reading`, emitted bare). This plan
+  originally defaulted to always-quoting instead of implementing check
+  (b), for lack of anywhere to source PostgreSQL's reserved-word list
+  from. **That's resolved now, not by removing the need for check (b),
+  but by there being a ready, canonical, already-correct list to reuse
+  for it**: spec.md §3.5 / `lexer.gleam`'s `is_postgres_reserved_word`,
+  the same table the lexer itself now enforces (see
+  `implementation-plan.md`'s "PostgreSQL reserved words") — codegen calls
+  the same function (or an equivalent moved somewhere both `lexer.gleam`
+  and codegen can reach) rather than hand-maintaining its own copy. The
+  lexer enforcing this at parse time doesn't let codegen skip check (b):
+  a StruoDB source can still *deliberately* quote a reserved word as an
+  identifier (`"order"`), and that identifier reaches the AST as the
+  plain string `order`, indistinguishable at that point from a
+  never-quoted one — but it does mean the *only* way `order` ever reaches
+  codegen unquoted-looking is if it was deliberately quoted in the
+  source, never by accident, which is what actually mattered about this
+  design decision from the start. Function-call names are unaffected by
+  any of this either way: emitted bare, lower-case, unquoted, since today
+  they're only ever one of a small, project-controlled set of built-ins
+  (§8.3), not arbitrary user-chosen identifiers.
 - **The `HLC` column transpiles to `CHAR(15)`, inlined `PRIMARY KEY`, no
   explicit `NOT NULL`** (redundant once `PRIMARY KEY` is present).
   `docs/hlc/spec.md` states the encoding is fixed-width, 15 characters,
@@ -456,28 +470,41 @@ RETURNING reading_hlc, reading_time;
 `generate_standalone` on the above should produce:
 
 ```sql
-CREATE TABLE "sensor_reading" (
-  "reading_hlc" CHAR(15) PRIMARY KEY,
-  "reading_time" TIMESTAMPTZ GENERATED ALWAYS AS (timestamptz_from_hlc("reading_hlc")) STORED,
-  "reading" REAL NOT NULL,
-  "units" VARCHAR(32) NOT NULL,
-  "sensor_id" VARCHAR(24) NOT NULL,
-  "notes" VARCHAR(200),
-  CONSTRAINT "reading_in_range" CHECK ("reading" > 0 AND "reading" <= 100)
+CREATE TABLE sensor_reading (
+  reading_hlc CHAR(15) PRIMARY KEY,
+  reading_time TIMESTAMPTZ GENERATED ALWAYS AS (timestamptz_from_hlc(reading_hlc)) STORED,
+  reading REAL NOT NULL,
+  units VARCHAR(32) NOT NULL,
+  sensor_id VARCHAR(24) NOT NULL,
+  notes VARCHAR(200),
+  CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100)
 );
 
-ALTER TABLE "sensor_reading"
-  ADD COLUMN "calibration_id" VARCHAR(24),
-  ALTER COLUMN "units" TYPE VARCHAR(64),
-  DROP CONSTRAINT "reading_in_range",
-  ADD CONSTRAINT "reading_in_range" CHECK ("reading" > 0 AND "reading" <= 90);
+ALTER TABLE sensor_reading
+  ADD COLUMN calibration_id VARCHAR(24),
+  ALTER COLUMN units TYPE VARCHAR(64),
+  DROP CONSTRAINT reading_in_range,
+  ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90);
 
-INSERT INTO "sensor_reading" ("reading_hlc", "reading", "units", "sensor_id")
+INSERT INTO sensor_reading (reading_hlc, reading, units, sensor_id)
 VALUES
   ('01a2B3c4D5e6f70abcde', 42.5, 'celsius', 'sensor-001')
 ON CONFLICT DO NOTHING
-RETURNING "reading_hlc", "reading_time";
+RETURNING reading_hlc, reading_time;
 ```
+
+(None of these identifiers need quoting: every one is already all-lowercase
+`[a-z_][a-z0-9_]*` as written in the source, and none is a PostgreSQL
+reserved word — the lexer would have rejected any of them unquoted in
+the source otherwise, per §3.5. A worked example using a name that
+*does* need quoting looks different depending on why: a column named
+`Sensor Reading` (written `"Sensor Reading"` in quoted source, since it
+has to be — that content is invalid for an unquoted identifier)
+round-trips to `"Sensor Reading"` via the content check; a column
+deliberately named `order` (written `"order"` in quoted source — legal
+content for an unquoted identifier, but written quoted anyway because
+it's reserved) round-trips to `"order"` via the reserved-word check,
+even though its content alone looks perfectly safe.)
 
 (This is also the concrete acceptance target for the "Statement codegen"
 section above — if the actual implementation's output differs from this
@@ -539,18 +566,27 @@ worth a decision before or during implementation:
   boundaries), this plan's original "one `generate`, any mix" framing
   should be dropped in favor of the two independent entry points already
   reflected in "Module layout" above. Not resolved here.
-- **Always-quote identifiers, or quote only when the content requires
-  it?** Always-quoting sidesteps needing a PostgreSQL reserved-word list
-  (which this codebase doesn't track) entirely, at the cost of noisier
-  output for the overwhelmingly common all-lowercase, no-special-
-  characters case (`"sensor_reading"` vs. `sensor_reading`). The
-  content-based heuristic described under "Design decisions" is correct
-  for everything *except* a name that happens to collide with a
-  PostgreSQL reserved word — which would need that list sourced from
-  somewhere (hand-maintained, or generated from PostgreSQL's own
-  `pg_get_keywords()` against a target version) to close. This plan
-  defaults to always-quoting; flagging in case the noisier output is
-  worth avoiding.
+- ~~Always-quote identifiers, or quote only when the content requires
+  it?~~ — **resolved**: this plan originally defaulted to always-quoting,
+  since a purely content-based heuristic (quote only if the string
+  contains uppercase/non-`[a-z0-9_]` characters or starts with a digit)
+  is correct for everything *except* a name colliding with a PostgreSQL
+  reserved word (`order`, `select`, ...) — which needs quoting regardless
+  of how safe its content looks, and needed that reserved-word list
+  sourced from somewhere (hand-maintained, or generated from
+  PostgreSQL's own `pg_get_keywords()` against a target version) to
+  close. That sourcing problem is resolved now: the same list is already
+  canonically implemented, as `lexer.gleam`'s `is_postgres_reserved_word`
+  (spec.md §3.5), which the lexer itself uses to reject such a word
+  *unquoted* at parse time — codegen reuses that same table (or an
+  equivalent moved somewhere both can reach) for its own quoting check,
+  rather than hand-maintaining a second copy. Codegen still needs to run
+  that check on every identifier it emits, content-safe-looking or not —
+  the lexer enforcing this doesn't make codegen's own check optional, it
+  only guarantees a bare-source name can never actually need it (a
+  StruoDB source can still deliberately quote a reserved word, e.g.
+  `"order"`, and codegen must still notice that on the way back out). See
+  "Design decisions" above.
 - **`GENERATED ALWAYS AS (...) VIRTUAL` and target PostgreSQL version.**
   This plan collapses `VIRTUAL` to the same output as `STORED` (see
   "Design decisions" for why that's safe regardless), which sidesteps

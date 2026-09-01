@@ -51,6 +51,9 @@ StruoDB follows PostgreSQL convention:
   truncation (already correct and encoding-aware) is what actually
   applies; nothing here requires StruoDB itself to perform or replicate
   that truncation before then.
+- **Reserved words**: an unquoted identifier may not be one of StruoDB's
+  own keywords (§3) or one of PostgreSQL's own reserved keywords (§3.5)
+  either — quoting is required to use such a word as an identifier.
 
 ## 3. Keywords
 
@@ -148,6 +151,146 @@ for why.
 `FROM` appear together as `IS [NOT] DISTINCT FROM` (§8.1); neither stands
 alone. `FROM` is not (yet) usable to introduce a table list the way it is
 in PostgreSQL's `SELECT` — see §12.
+
+### 3.5 PostgreSQL Reserved Words
+
+None of the words below carry any meaning in StruoDB's own grammar — they
+are ordinary PostgreSQL keywords, not StruoDB ones — but an unquoted
+identifier may not be one of them either, on top of not being one of
+§3.1–§3.4's own keywords. Specifically: the keywords PostgreSQL's own
+keyword list
+([sql-keywords-appendix](https://www.postgresql.org/docs/current/sql-keywords-appendix.html),
+"PostgreSQL" column, as of PostgreSQL 18) categorizes as **reserved** or
+**reserved (can be function or type name)**. (PostgreSQL's own
+"non-reserved" keywords — e.g. `VALUE`, `TYPE`, `TEXT` — are unaffected;
+only its two "reserved" categories matter here, since both require
+quoting for any identifier that isn't specifically a function or type
+name, which covers every identifier position this grammar has.)
+
+This exists so that every unquoted identifier the parser accepts is
+guaranteed usable, unquoted, in the transpiled PostgreSQL SQL: without
+it, a stream named `table` or a column named `select` would parse
+cleanly here but produce a PostgreSQL syntax error once transpiled,
+since PostgreSQL itself requires these words to be quoted wherever an
+identifier is expected. Enforcing it here — at the lexer, before parsing
+even begins — guarantees an *unquoted* source identifier is always safe
+to transpile bare: only a *quoted* source identifier can ever need
+requoting on the way out (whether for its content, or because it's one
+of the words below chosen deliberately, quoted), a narrower problem than
+checking every identifier regardless of how it was written; see
+`docs/lang/codegen-plan.md`'s identifier-quoting design decision. A
+quoted identifier is unaffected — `"table"` is always valid, same as any
+other identifier, per §2.
+
+* ALL
+* ANALYSE
+* ANALYZE
+* AND
+* ANY
+* ARRAY
+* AS
+* ASC
+* ASYMMETRIC
+* AUTHORIZATION
+* BINARY
+* BOTH
+* CASE
+* CAST
+* CHECK
+* COLLATE
+* COLLATION
+* COLUMN
+* CONCURRENTLY
+* CONSTRAINT
+* CREATE
+* CROSS
+* CURRENT_CATALOG
+* CURRENT_DATE
+* CURRENT_ROLE
+* CURRENT_SCHEMA
+* CURRENT_TIME
+* CURRENT_TIMESTAMP
+* CURRENT_USER
+* DEFAULT
+* DEFERRABLE
+* DESC
+* DISTINCT
+* DO
+* ELSE
+* END
+* EXCEPT
+* FALSE
+* FETCH
+* FOR
+* FOREIGN
+* FREEZE
+* FROM
+* FULL
+* GRANT
+* GROUP
+* HAVING
+* ILIKE
+* IN
+* INITIALLY
+* INNER
+* INTERSECT
+* INTO
+* IS
+* ISNULL
+* JOIN
+* LATERAL
+* LEADING
+* LEFT
+* LIKE
+* LIMIT
+* LOCALTIME
+* LOCALTIMESTAMP
+* NATURAL
+* NOT
+* NOTNULL
+* NULL
+* OFFSET
+* ON
+* ONLY
+* OR
+* ORDER
+* OUTER
+* OVERLAPS
+* PLACING
+* PRIMARY
+* REFERENCES
+* RETURNING
+* RIGHT
+* SELECT
+* SESSION_USER
+* SIMILAR
+* SOME
+* SYMMETRIC
+* SYSTEM_USER
+* TABLE
+* TABLESAMPLE
+* THEN
+* TO
+* TRAILING
+* TRUE
+* UNION
+* UNIQUE
+* USER
+* USING
+* VARIADIC
+* VERBOSE
+* WHEN
+* WHERE
+* WINDOW
+* WITH
+
+Twenty-four of these (`AND`, `AS`, `CHECK`, `COLUMN`, `CONSTRAINT`,
+`CREATE`, `DEFAULT`, `DISTINCT`, `DO`, `FALSE`, `FROM`, `ILIKE`, `IN`,
+`INTO`, `IS`, `LIKE`, `NOT`, `NULL`, `ON`, `OR`, `RETURNING`, `SIMILAR`,
+`TO`, `TRUE`) already appear in §3.1–§3.4 as StruoDB's own keywords, and
+were already unusable as unquoted identifiers before this section
+existed; they're repeated here only for completeness against
+PostgreSQL's own list.
 
 ## 4. Literals
 
@@ -879,7 +1022,10 @@ above can be read in context and aren't re-litigated later:
   constraint_name`; StruoDB requires it so schema evolution never has to
   look up a system-generated name. See §9.5.
 - **No `UNIQUE`, no foreign keys.** See §9.5.
-- **All keywords reserved.** See §3.
+- **All keywords reserved**, and, additionally, an unquoted identifier
+  may not be one of PostgreSQL's own reserved keywords either, so every
+  unquoted identifier this grammar accepts is guaranteed safe to emit
+  unquoted in transpiled PostgreSQL SQL. See §3, §3.5.
 - **Expression grammar and precedence follow PostgreSQL**, restricted to
   the operators/keywords StruoDB currently defines. See §8.
 - **`BETWEEN`'s bounds, `LIKE`/`ILIKE`/`SIMILAR TO`'s pattern, and

@@ -22,6 +22,13 @@ pub type LexError {
   /// short literal, and simpler than threading a second position through
   /// every digit-run helper below.
   InvalidDigitGroupSeparator(at: Position)
+  /// An unquoted identifier matched one of PostgreSQL's own reserved
+  /// words (§3.5) — `word` is already folded to lower case. Quoting it
+  /// (`"..."`, §2) is unaffected and always works; this only rejects the
+  /// unquoted spelling, the same restriction PostgreSQL itself applies.
+  /// See §3.5 for why StruoDB enforces this rather than leaving it to
+  /// the transpiler.
+  ReservedWord(word: String, at: Position)
   UnknownCharacter(char: String, at: Position)
 }
 
@@ -286,11 +293,28 @@ fn scan_identifier(
   // "On not truncating in the lexer" in docs/lang/implementation-plan.md;
   // the full text is kept all the way through tokens and the AST.
   let folded = string.lowercase(raw)
-  let kind = case lookup_keyword(folded) {
-    Some(kw) -> token.Keyword(kw)
-    None -> token.Identifier(folded)
+  case lookup_keyword(folded) {
+    Some(kw) ->
+      Ok(#(
+        token.Token(token.Keyword(kw), token.Span(pos, end_pos)),
+        rest,
+        end_pos,
+      ))
+    // Not one of StruoDB's own keywords — still rejected unquoted if it's
+    // one of PostgreSQL's own reserved words (§3.5); a StruoDB keyword
+    // that also happens to be PostgreSQL-reserved (e.g. `create`, `not`)
+    // is already handled above and never reaches this check.
+    None ->
+      case is_postgres_reserved_word(folded) {
+        True -> Error(ReservedWord(word: folded, at: pos))
+        False ->
+          Ok(#(
+            token.Token(token.Identifier(folded), token.Span(pos, end_pos)),
+            rest,
+            end_pos,
+          ))
+      }
   }
-  Ok(#(token.Token(kind, token.Span(pos, end_pos)), rest, end_pos))
 }
 
 /// `text` is already folded to lower case by the caller — keywords are
@@ -365,6 +389,122 @@ fn lookup_keyword(text: String) -> Option(Keyword) {
     "similar" -> Some(token.KwSimilar)
     "to" -> Some(token.KwTo)
     _ -> None
+  }
+}
+
+/// `text` is already folded to lower case by the caller, and already
+/// known (by `scan_identifier`) not to be one of StruoDB's own keywords.
+/// True for exactly the words spec.md §3.5 lists: PostgreSQL's own
+/// "reserved" and "reserved (can be function or type name)" keywords
+/// (https://www.postgresql.org/docs/current/sql-keywords-appendix.html,
+/// "PostgreSQL" column, as of PostgreSQL 18) — see §3.5 for why StruoDB
+/// rejects these unquoted rather than leaving the problem to the
+/// transpiler. Same `case`-over-literals style as `lookup_keyword` above,
+/// for the same reason.
+fn is_postgres_reserved_word(text: String) -> Bool {
+  case text {
+    "all"
+    | "analyse"
+    | "analyze"
+    | "and"
+    | "any"
+    | "array"
+    | "as"
+    | "asc"
+    | "asymmetric"
+    | "authorization"
+    | "binary"
+    | "both"
+    | "case"
+    | "cast"
+    | "check"
+    | "collate"
+    | "collation"
+    | "column"
+    | "concurrently"
+    | "constraint"
+    | "create"
+    | "cross"
+    | "current_catalog"
+    | "current_date"
+    | "current_role"
+    | "current_schema"
+    | "current_time"
+    | "current_timestamp"
+    | "current_user"
+    | "default"
+    | "deferrable"
+    | "desc"
+    | "distinct"
+    | "do"
+    | "else"
+    | "end"
+    | "except"
+    | "false"
+    | "fetch"
+    | "for"
+    | "foreign"
+    | "freeze"
+    | "from"
+    | "full"
+    | "grant"
+    | "group"
+    | "having"
+    | "ilike"
+    | "in"
+    | "initially"
+    | "inner"
+    | "intersect"
+    | "into"
+    | "is"
+    | "isnull"
+    | "join"
+    | "lateral"
+    | "leading"
+    | "left"
+    | "like"
+    | "limit"
+    | "localtime"
+    | "localtimestamp"
+    | "natural"
+    | "not"
+    | "notnull"
+    | "null"
+    | "offset"
+    | "on"
+    | "only"
+    | "or"
+    | "order"
+    | "outer"
+    | "overlaps"
+    | "placing"
+    | "primary"
+    | "references"
+    | "returning"
+    | "right"
+    | "select"
+    | "session_user"
+    | "similar"
+    | "some"
+    | "symmetric"
+    | "system_user"
+    | "table"
+    | "tablesample"
+    | "then"
+    | "to"
+    | "trailing"
+    | "true"
+    | "union"
+    | "unique"
+    | "user"
+    | "using"
+    | "variadic"
+    | "verbose"
+    | "when"
+    | "where"
+    | "window"
+    | "with" -> True
+    _ -> False
   }
 }
 
