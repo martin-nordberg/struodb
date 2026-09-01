@@ -225,11 +225,14 @@ pub fn expr_to_sql(expr: Expr) -> String {
       <> "DISTINCT FROM "
       <> paren_if_needed(right, 9)
     FunctionCall(name, args) ->
-      // Bare, lower-case, unquoted — never re-quoted or re-cased, since
-      // today a function name is always one of a small, project-
-      // controlled set of built-ins (§8.3), not an arbitrary user-chosen
-      // identifier. See "Generated identifiers..." in codegen-plan.md.
-      name
+      // Quoted the same way any other identifier is (bare only when
+      // that's actually safe): the parser accepts a quoted identifier
+      // here too (§8.3's grammar doesn't otherwise restrict function-
+      // call position to a fixed built-in set), so `name` may carry
+      // arbitrary content — quoting is what keeps it inert as SQL
+      // rather than splicing it in verbatim. See "Generated
+      // identifiers..." in codegen-plan.md.
+      quote_identifier(name)
       <> "("
       // Same "delimiters already disambiguate" reasoning as IN's list
       // above.

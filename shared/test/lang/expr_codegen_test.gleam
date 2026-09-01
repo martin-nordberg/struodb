@@ -270,6 +270,19 @@ pub fn function_call_renders_bare_lowercase_including_zero_arg_test() {
     == "timestamptz_from_hlc(reading_hlc)"
 }
 
+/// A function name reaching codegen is quoted like any other identifier
+/// rather than spliced in bare — the parser accepts a `QuotedIdentifier`
+/// in function-call position (§8.3's grammar doesn't restrict it to a
+/// fixed built-in set), so `name` may carry content an attacker chose,
+/// including SQL metacharacters. Quoting keeps it inert as a single
+/// identifier token instead of letting it break out of the expression.
+pub fn function_call_name_needing_quoting_is_quoted_not_spliced_raw_test() {
+  assert expr_codegen.expr_to_sql(
+      xast.FunctionCall("pwn); drop table s; --", []),
+    )
+    == "\"pwn); drop table s; --\"()"
+}
+
 //-----------------------------------------------------------------------------
 // Precedence-driven reparenthesization (spec.md §8.2)
 //-----------------------------------------------------------------------------
