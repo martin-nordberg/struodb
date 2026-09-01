@@ -152,11 +152,12 @@ never alters a stream's shape.
 - `dml_ast.gleam` / `dml_parser.gleam` (streams) — `Insert` shape (spec.md
   §11) and its parser.
 - `ddl_semantics.gleam` (schema) / `dml_semantics.gleam` (streams) —
-  validate a parsed statement against a `Catalog`. The two currently
-  duplicate their `SemanticError` type and column-reference-collecting
-  helpers rather than sharing them (`dml_semantics`'s copy carries several
-  DDL-only variants it never raises) — a known simplification opportunity,
-  not yet acted on.
+  validate a parsed statement against a `Catalog`. Each defines its own
+  `SemanticError`, scoped to the variants it actually raises (no longer a
+  full copy of the other's). The two still duplicate their
+  column-reference-collecting helpers (`collect_column_refs`/
+  `check_expr_column_refs`) verbatim rather than sharing them — a known
+  simplification opportunity, not yet acted on.
 - `catalog.gleam` (schema) — tracks the accumulated, validated shape of a
   stream as `CREATE STREAM`/`ALTER STREAM` statements are applied to it.
   Lives in `schema/`, next to the `ddl_ast` types `apply_statement`

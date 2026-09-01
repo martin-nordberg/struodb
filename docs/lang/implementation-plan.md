@@ -139,10 +139,11 @@ src/lang/                            shared/src/lang/
                                         dml_ast.gleam      # Insert/Value/ReturningItem half of ast.gleam,
                                                            # renamed DmlStatement
                                         dml_parser.gleam  # INSERT half of parser.gleam
-                                        dml_semantics.gleam # INSERT half of semantic.gleam — currently a
-                                                           # full copy of ddl_semantics.gleam's
-                                                           # SemanticError/helpers, not a shared type;
-                                                           # see "Open questions"
+                                        dml_semantics.gleam # INSERT half of semantic.gleam — its own
+                                                           # scoped SemanticError, but its
+                                                           # collect_column_refs/check_expr_column_refs
+                                                           # are still a copy of ddl_semantics.gleam's,
+                                                           # not a shared helper; see "Open questions"
 
 test/lang/                           shared/test/lang/
   token_test.gleam                     token_test.gleam   # still unbuilt, see below
@@ -839,14 +840,15 @@ for instance) — it shouldn't only exist as a side effect of validation.
 As planned, one `semantic.gleam` held one `SemanticError` type covering
 `CreateStream`/`AlterStream`/`Insert` together and one `analyze`. As
 built, each statement family owns its own module, its own `SemanticError`,
-and its own `analyze` — and, as of this writing, `dml_semantics.gleam`'s
-`SemanticError` is a **full copy** of `ddl_semantics.gleam`'s (all sixteen
-`CREATE`/`ALTER`-only variants included, none of which `dml_semantics`'
-`check_insert` ever constructs) rather than a type of its own holding only
-the `Insert`-relevant subset. Likewise `collect_column_refs`/
-`check_expr_column_refs` (the `Expr`-walking helpers immediately below)
-are copy-pasted verbatim into both modules. This is flagged as a
-known simplification opportunity in "Open questions" below, not
+and its own `analyze`. `dml_semantics.gleam`'s `SemanticError` started
+out (once the package split landed) as a full copy of `ddl_semantics.
+gleam`'s, all sixteen `CREATE`/`ALTER`-only variants included though none
+of them were ever constructed by `dml_semantics`' `check_insert` — a
+review pruned that copy down to just the eight variants below.
+`collect_column_refs`/`check_expr_column_refs` (the `Expr`-walking
+helpers immediately below the two `SemanticError` types), by contrast,
+are still copy-pasted verbatim into both modules — that half is flagged
+as a remaining simplification opportunity in "Open questions" below, not
 something this plan resolves.
 
 ```gleam
@@ -877,9 +879,8 @@ pub type SemanticError {
 ```
 
 ```gleam
-// streams/src/lang/dml_semantics.gleam — as built, a full copy of the
-// above plus the four Insert-only variants below (see note above); as it
-// should probably look, holding only what check_insert actually raises:
+// streams/src/lang/dml_semantics.gleam — holds only what check_insert
+// actually raises (see note above).
 pub type SemanticError {
   UnknownStream(name: String, span: Span)
   UnknownColumnReference(referenced: String, span: Span)
@@ -1295,9 +1296,9 @@ from `shared/` to `schema/`; `semantic.gleam` split into
 `ddl_semantics.gleam` (schema) + `dml_semantics.gleam` (streams,
 depending on `schema` for `catalog.gleam`). See "Module layout" above for
 the resulting layout and "Open questions" below for what the split left
-unresolved (the `SemanticError`/helper duplication between the two
-`*_semantics.gleam` modules; `streams` depending on the whole `schema`
-package for `catalog.gleam` alone).
+unresolved (the `collect_column_refs`/`check_expr_column_refs` helper
+duplication between the two `*_semantics.gleam` modules; `streams`
+depending on the whole `schema` package for `catalog.gleam` alone).
 
 ---
 
@@ -1377,22 +1378,24 @@ here — see that list directly) plus what this planning pass surfaced:
   unresolved decision on the verification mechanism (see spec.md's
   "Remaining open details" for the options under consideration).
 - **`ddl_semantics.gleam`/`dml_semantics.gleam`'s duplicated
-  `SemanticError`/`collect_column_refs`/`check_expr_column_refs`**
-  (surfaced by review once the package split landed — see "Module layout"
-  and the `*_semantics.gleam` section above) are two independently
-  maintained copies of what was one `semantic.gleam`. `dml_semantics`'
-  copy of `SemanticError` in particular carries sixteen variants it never
-  constructs. Options, in increasing order of how much they change: (a)
-  leave it — the duplication is currently harmless, just a sync hazard if
-  a shared rule (e.g. `UnknownColumnReference`'s wording) ever changes in
-  one copy and not the other; (b) prune `dml_semantics`'s `SemanticError`
-  to only the variants `check_insert` actually raises (no new module,
-  smallest change); (c) move `collect_column_refs`/
+  `collect_column_refs`/`check_expr_column_refs`** (surfaced by review
+  once the package split landed — see "Module layout" and the
+  `*_semantics.gleam` section above) are copy-pasted verbatim into both
+  modules. (`SemanticError` itself was the same story until a review
+  pruned `dml_semantics`'s copy down to only the eight variants
+  `check_insert` actually raises — see the `*_semantics.gleam` section
+  above — so this item is narrower than it originally was.) Options, in
+  increasing order of how much they change: (a) leave it — the
+  duplication is currently harmless, just a sync hazard if a shared rule
+  (e.g. how `UnknownColumnReference` walks `IsDistinctFrom`) ever changes
+  in one copy and not the other; (b) move `collect_column_refs`/
   `check_expr_column_refs` (pure `Expr`-only traversal, no `Catalog`/AST
   dependency) into `shared/src/lang/expr_ast.gleam` or a new
-  `shared/src/lang/expr_semantics.gleam`, so at least that half stops
-  being copy-pasted, independent of what happens to `SemanticError`
-  itself. Not resolved here.
+  `shared/src/lang/expr_semantics.gleam`, so that half stops being
+  copy-pasted too — this would need `check_expr_column_refs` to take an
+  error-constructing function as a parameter, since each package's own
+  `UnknownColumnReference` is a variant of its own distinct
+  `SemanticError` type. Not resolved here.
 - **`streams` depends on the whole `schema` package just to reach
   `catalog.gleam`.** `catalog.apply_statement` operates directly on
   `ddl_ast`'s `DdlStatement`/`StreamElement`/`AlterAction` (schema-only

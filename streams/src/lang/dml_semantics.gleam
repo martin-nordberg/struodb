@@ -16,42 +16,10 @@ import lang/token.{type Span}
 //-----------------------------------------------------------------------------
 
 pub type SemanticError {
-  MissingHlcColumn(stream: String, span: Span)
-  MultipleHlcColumns(stream: String, first: String, second: String, span: Span)
-  /// §9.2
-  HlcColumnOptional(column: String, span: Span)
-  /// §9.2
-  HlcColumnHasDefaultOrGenerated(column: String, span: Span)
-  /// §9.4. `span` is the offending `ColumnRef`'s own span, not the
-  /// enclosing `DEFAULT`'s — see "Expression-level spans" in the plan.
-  DefaultReferencesColumn(column: String, referenced: String, span: Span)
-  /// `span` is the offending `ColumnRef`'s own span, ditto.
-  UnknownColumnReference(referenced: String, span: Span)
-  DuplicateColumnName(stream: String, name: String, span: Span)
-  DuplicateConstraintName(stream: String, name: String, span: Span)
   UnknownStream(name: String, span: Span)
-  /// §10.2
-  AddColumnNeedsOptionalOrDefault(column: String, span: Span)
-  /// §10.2
-  AddSecondHlcColumn(column: String, span: Span)
-  /// §10.3
-  DropNonOptionalColumn(column: String, span: Span)
-  DropUnknownColumn(column: String, span: Span)
-  /// §10.4
-  NarrowingTypeChange(
-    column: String,
-    from: xast.DataType,
-    to: xast.DataType,
-    span: Span,
-  )
-  /// §10.4 — a change between unrelated type families entirely.
-  UnsupportedTypeChange(
-    column: String,
-    from: xast.DataType,
-    to: xast.DataType,
-    span: Span,
-  )
-  DropUnknownConstraint(name: String, span: Span)
+  /// `span` is the offending `ColumnRef`'s own span, not the enclosing
+  /// expression's — see "Expression-level spans" in the plan.
+  UnknownColumnReference(referenced: String, span: Span)
   InsertColumnListEmpty(span: Span)
   InsertUnknownColumn(column: String, span: Span)
   /// §11.4
@@ -61,12 +29,6 @@ pub type SemanticError {
   /// §11.2/§11.3 — `NOT NULL` with no default and no explicit value.
   InsertMissingRequiredColumn(column: String, span: Span)
   InsertColumnCountMismatch(expected: Int, got: Int, row_index: Int, span: Span)
-  /// §9.1's `data_type` parameter bounds (`VARCHAR`/`CHAR` length >= 1;
-  /// `DECIMAL`/`NUMERIC` precision >= 1, `0 <= scale <= precision`) —
-  /// **not** in the implementation plan's own `SemanticError` listing,
-  /// even though the plan's "CREATE STREAM checks" step 7 calls for the
-  /// check itself; added here to actually carry it out.
-  InvalidDataTypeParameter(column: String, span: Span, reason: String)
 }
 
 /// Validates `stmt` against `catalog`'s current declared shape (relevant
