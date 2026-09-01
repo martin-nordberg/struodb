@@ -371,16 +371,31 @@ pub fn alter_stream_example_round_trips_test() {
       ADD COLUMN calibration_id VARCHAR(24) OPTIONAL,
       ALTER COLUMN units TYPE VARCHAR(64),
       DROP CONSTRAINT reading_in_range,
-      ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90);"
+      ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90),
+      DROP COLUMN sensor_id;"
 
   let assert ast.AlterStream(name: "sensor_reading", actions: actions, ..) =
     parse_ok(source)
-  assert list.length(actions) == 4
+  assert list.length(actions) == 5
   let assert [
     ast.AddColumn(ast.ColumnDef(name: "calibration_id", optional: True, ..), ..),
     ast.AlterColumnType("units", xast.DtVarchar(Some(64)), _),
     ast.DropConstraint("reading_in_range", _),
     ast.AddConstraint(xast.NamedCheck("reading_in_range", _, _)),
+    ast.DropColumn("sensor_id", _),
   ] = actions
+}
+
+pub fn generated_always_as_virtual_parses_test() {
+  let assert ast.CreateStream(
+    elements: [
+      _,
+      ast.Column(ast.ColumnDef(
+        generated: Some(xast.GeneratedClause(_, xast.Virtual)),
+        ..,
+      )),
+    ],
+    ..,
+  ) = parse_ok("CREATE STREAM s (a INT, b INT GENERATED ALWAYS AS (a) VIRTUAL)")
 }
 //-----------------------------------------------------------------------------

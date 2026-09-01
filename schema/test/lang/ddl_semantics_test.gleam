@@ -392,6 +392,46 @@ pub fn drop_unknown_constraint_test() {
     ddl_semantics.analyze(base_catalog(), stmt)
 }
 
+pub fn alter_column_type_on_an_unknown_column_reuses_drop_unknown_column_test() {
+  let stmt =
+    alter_stream("s", [
+      ast.AlterColumnType(
+        column_name: "zzz",
+        data_type: xast.DtInt,
+        span: dummy_span(),
+      ),
+    ])
+  let assert Error([ddl_semantics.DropUnknownColumn(column: "zzz", span: _)]) =
+    ddl_semantics.analyze(base_catalog(), stmt)
+}
+
+/// §10.5: a `DROP CONSTRAINT x, ADD CONSTRAINT x ...` pair under the same
+/// name, in one statement, is how a constraint is replaced — must not
+/// trip `AddConstraint`'s own duplicate-name check against the constraint
+/// it's in the same breath replacing. `check_alter_stream`'s
+/// `dropped_constraint_names` special-case exists specifically for this.
+pub fn drop_then_add_constraint_under_the_same_name_replaces_it_test() {
+  let replacement =
+    xast.NamedCheck(
+      "a_positive",
+      xast.BinaryOp(xast.CmpGe, col_ref("a"), xast.IntLiteral("0")),
+      dummy_span(),
+    )
+  let stmt =
+    alter_stream("s", [
+      ast.DropConstraint(constraint_name: "a_positive", span: dummy_span()),
+      ast.AddConstraint(replacement),
+    ])
+  let assert Ok(cat) = ddl_semantics.analyze(base_catalog(), stmt)
+
+  let assert Ok(schema) = dict.get(cat.streams, "s")
+  let assert Ok(check) = dict.get(schema.constraints, "a_positive")
+  // Not the original `a > 0` — proves the replacement actually took,
+  // rather than the DROP and ADD merely not erroring.
+  assert check.expr
+    == xast.BinaryOp(xast.CmpGe, col_ref("a"), xast.IntLiteral("0"))
+}
+
 //-----------------------------------------------------------------------------
 // spec.md's worked examples, end to end (lexer -> parser -> semantic)
 //-----------------------------------------------------------------------------

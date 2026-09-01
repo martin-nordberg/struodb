@@ -251,6 +251,25 @@ pub fn insert_returning_star_test() {
     parse_ok("INSERT INTO s (a) VALUES (1) RETURNING *")
 }
 
+pub fn insert_returning_an_aliased_expr_test() {
+  let assert Insert(
+    returning: Some([ReturningExpr(ColumnRef("a", _), alias)]),
+    ..,
+  ) = parse_ok("INSERT INTO s (a) VALUES (1) RETURNING a AS b")
+  assert alias == Some("b")
+}
+
+pub fn insert_with_multiple_value_rows_parses_each_in_order_test() {
+  let assert Insert(
+    rows: [
+      [ValueExpr(IntLiteral("1"))],
+      [ValueExpr(IntLiteral("2"))],
+      [ValueExpr(IntLiteral("3"))],
+    ],
+    ..,
+  ) = parse_ok("INSERT INTO s (a) VALUES (1), (2), (3)")
+}
+
 pub fn insert_without_a_column_list_is_a_parse_error_test() {
   let assert Error(ep.UnexpectedToken(found: _, expected: _)) =
     parse("INSERT INTO s VALUES (1)")

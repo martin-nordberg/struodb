@@ -35,4 +35,17 @@ pub fn stop_writer_terminates_the_actor_test() {
 
   support.wait_until_stopped(pid, 1000)
 }
+
+/// `writer.stop` (as opposed to just sending `StopWriter`, above) is the
+/// public API real callers use, and blocks until the actor has actually
+/// exited — asserting the process is already dead the moment `stop`
+/// returns, not just "eventually", is the whole point of that blocking.
+pub fn stop_function_blocks_until_the_actor_has_exited_test() {
+  let writer_subject = writer.start(io.println)
+  let assert Ok(pid) = process.subject_owner(writer_subject)
+
+  writer.stop(writer_subject)
+
+  assert !process.is_alive(pid)
+}
 //-----------------------------------------------------------------------------
