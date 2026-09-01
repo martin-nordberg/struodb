@@ -13,8 +13,12 @@ pub fn read_loop(
 ) -> Nil {
   case read_input() {
     Ok(input) if input == "~quit\n" -> {
+      // This send is fire-and-forget: `read_loop` returning doesn't itself
+      // wait for the dispatcher to actually finish draining and stopping.
+      // The caller that started the dispatcher owns that wait — see
+      // `dispatcher.stop`, called from `streams.gleam`'s `main` after
+      // `read_loop` returns, before it stops the writer.
       actor.send(dispatcher, StopDispatcher)
-      // TODO: wait for dispatcher to exit
       io.println("Exiting ...")
     }
     Ok(input) -> {

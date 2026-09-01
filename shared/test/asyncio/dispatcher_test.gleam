@@ -141,4 +141,128 @@ pub fn stop_dispatcher_terminates_the_actor_test() {
 
   support.wait_until_stopped(pid, 1000)
 }
+
+//-----------------------------------------------------------------------------
+// Graceful shutdown: Ready -> Draining -> Stopping -> Stopped
+//-----------------------------------------------------------------------------
+
+/// `dispatcher.stop` — as opposed to just sending `StopDispatcher`, above —
+/// is the public API real callers use, and blocks until the actor has
+/// actually exited.
+pub fn stop_function_blocks_until_the_actor_has_exited_test() {
+  let writer_subject = process.new_subject()
+
+  let dispatcher_subject =
+    dispatcher.start(writer_subject, fn(input) { input }, 1, 2)
+  let assert Ok(pid) = process.subject_owner(dispatcher_subject)
+
+  dispatcher.stop(dispatcher_subject)
+
+  assert !process.is_alive(pid)
+}
+
+/// `max_worker_count = 1` with two jobs already queued ahead of the stop
+/// means both must finish — through the ordinary drain-through-workers
+/// path — before `dispatcher.stop` can return; if draining stopped
+/// prematurely or a queued job were dropped, one of the two outputs
+/// would never arrive and `stop` would hang until the test's own timeout.
+pub fn jobs_queued_before_stop_are_all_processed_before_it_stops_test() {
+  let writer_subject = process.new_subject()
+
+  let dispatcher_subject =
+    dispatcher.start(
+      writer_subject,
+      fn(input) {
+        process.sleep(100)
+        input <> "-done"
+      },
+      0,
+      1,
+    )
+
+  process.send(dispatcher_subject, AddJob("a"))
+  process.send(dispatcher_subject, AddJob("b"))
+  process.send(dispatcher_subject, AddJob("c"))
+
+  dispatcher.stop(dispatcher_subject)
+
+  let outputs =
+    support.receive_n(writer_subject, 3, 500)
+    |> list.map(fn(message) {
+      let assert WriteOutput(text) = message
+      text
+    })
+  assert outputs == ["a-done", "b-done", "c-done"]
+}
+
+/// A job submitted after `StopDispatcher` but while a still-pending job is
+/// still draining must be rejected, not queued behind it — `"c"` here
+/// never appears among the outputs even though the dispatcher is still
+/// very much alive and processing (`"b"`) when it arrives.
+pub fn a_job_added_while_draining_is_rejected_test() {
+  let writer_subject = process.new_subject()
+
+  let dispatcher_subject =
+    dispatcher.start(
+      writer_subject,
+      fn(input) {
+        process.sleep(100)
+        input <> "-done"
+      },
+      0,
+      1,
+    )
+
+  // "a" starts immediately on the sole worker; "b" queues behind it since
+  // max_worker_count = 1.
+  process.send(dispatcher_subject, AddJob("a"))
+  process.send(dispatcher_subject, AddJob("b"))
+
+  // Still Draining at this point ("b" hasn't drained yet), so "c" is
+  // rejected rather than queued.
+  process.send(dispatcher_subject, StopDispatcher)
+  process.send(dispatcher_subject, AddJob("c"))
+
+  let outputs =
+    support.receive_n(writer_subject, 2, 2000)
+    |> list.map(fn(message) {
+      let assert WriteOutput(text) = message
+      text
+    })
+  assert outputs == ["a-done", "b-done"]
+
+  // No third output ever arrives for the rejected "c".
+  let assert Error(Nil) = process.receive(writer_subject, 200)
+}
+
+/// A `StopDispatcher` received while already draining must be a harmless
+/// no-op, not a crash or a reset back to some earlier state — the
+/// in-flight drain still runs to completion either way.
+pub fn a_second_stop_dispatcher_while_draining_is_a_no_op_test() {
+  let writer_subject = process.new_subject()
+
+  let dispatcher_subject =
+    dispatcher.start(
+      writer_subject,
+      fn(input) {
+        process.sleep(100)
+        input <> "-done"
+      },
+      0,
+      1,
+    )
+
+  process.send(dispatcher_subject, AddJob("a"))
+  process.send(dispatcher_subject, AddJob("b"))
+  process.send(dispatcher_subject, StopDispatcher)
+  process.send(dispatcher_subject, StopDispatcher)
+
+  let outputs =
+    support.receive_n(writer_subject, 2, 2000)
+    |> list.map(fn(message) {
+      let assert WriteOutput(text) = message
+      text
+    })
+  assert outputs == ["a-done", "b-done"]
+}
 //-----------------------------------------------------------------------------

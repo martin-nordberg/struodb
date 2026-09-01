@@ -37,6 +37,7 @@ pub fn main() {
 
   reader.read_loop(dispatcher, fn() { in.read_line() })
 
+  dispatcher.stop(dispatcher)
   writer.stop(writer)
 }
 

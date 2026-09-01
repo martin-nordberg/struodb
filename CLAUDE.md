@@ -85,10 +85,24 @@ busy. A worker calls the caller-supplied `handle_input: fn(String) ->
 String` and sends the result to a shared `writer` actor for output. Message
 types for all four roles live centrally in `asyncio/messages.gleam`
 (`DispatcherMessage`, `WorkerMessage`, `WriterMessage`); actors talk to each
-other only through these, never through shared state. See `docs/todo.md`
-for known correctness gaps in the shutdown path (dispatcher exit racing
-in-flight work, worker-leak on `StopDispatcher`, fragile quit-sentinel
-matching in `reader`) before touching that code.
+other only through these, never through shared state.
+
+The dispatcher stops gracefully rather than dropping in-flight work or
+leaking its worker pool: `StopDispatcher` moves it through
+`Ready -> Draining -> Stopping -> Stopped` (see the `DispatcherStatus` doc
+comment in `dispatcher.gleam`) — draining lets already-queued jobs finish
+while rejecting new `AddJob`s, then every worker is told to stop once it's
+next idle, and only once every worker has been told to stop does the
+dispatcher call `actor.stop()` itself. `dispatcher.stop(subject)` (mirroring
+`writer.stop`) sends `StopDispatcher` and blocks until the actor has
+actually exited — unlike `writer.stop`, with no fixed timeout, since
+draining a backlog has no bound. It's the caller that started the
+dispatcher's job to call it (see `streams.gleam`'s `main`, which does so
+after `reader.read_loop` returns and before stopping the writer) —
+`reader.gleam` itself still only fire-and-forgets `StopDispatcher` on the
+quit sentinel and does not wait. See `docs/todo.md` for the one remaining
+known gap (a fragile quit-sentinel match in `reader`) before touching that
+code.
 
 ### `shared/hlc` — hybrid logical clock
 
