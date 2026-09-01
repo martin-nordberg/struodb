@@ -70,17 +70,50 @@ pub fn a_read_error_ends_the_loop_without_dispatching_anything_test() {
   let assert Error(Nil) = process.receive(dispatcher_subject, 0)
 }
 
-/// Documents a known gap (`docs/todo.md` #3), not a requirement: the quit
-/// check is an exact match against `"~quit\n"`, so `"~quit"` with no
-/// trailing newline — e.g. the last line of piped input with no final
-/// newline — is dispatched as an ordinary job instead of stopping the
-/// dispatcher. If that's ever fixed, this test's expectation flips along
-/// with it.
-pub fn quit_without_a_trailing_newline_is_not_recognized_test() {
+/// The formerly-fragile case (`docs/todo.md`'s old #3, now fixed): the
+/// last line of piped input with no trailing newline before EOF must still
+/// be recognized as the quit sentinel, not dispatched as an ordinary job.
+pub fn quit_without_a_trailing_newline_is_recognized_test() {
   let dispatcher_subject = process.new_subject()
 
   reader.read_loop(dispatcher_subject, scripted_read_input(["~quit"]))
 
-  let assert Ok(AddJob("~quit")) = process.receive(dispatcher_subject, 0)
+  let assert Ok(StopDispatcher) = process.receive(dispatcher_subject, 0)
+}
+
+/// A Windows-style line ending is stripped the same as a bare `\n`.
+pub fn quit_with_a_carriage_return_line_ending_is_recognized_test() {
+  let dispatcher_subject = process.new_subject()
+
+  reader.read_loop(dispatcher_subject, scripted_read_input(["~quit\r\n"]))
+
+  let assert Ok(StopDispatcher) = process.receive(dispatcher_subject, 0)
+}
+
+pub fn the_abbreviated_quit_sentinel_stops_the_dispatcher_test() {
+  let dispatcher_subject = process.new_subject()
+
+  reader.read_loop(dispatcher_subject, scripted_read_input(["~q\n"]))
+
+  let assert Ok(StopDispatcher) = process.receive(dispatcher_subject, 0)
+}
+
+pub fn the_abbreviated_quit_sentinel_without_a_trailing_newline_is_recognized_test() {
+  let dispatcher_subject = process.new_subject()
+
+  reader.read_loop(dispatcher_subject, scripted_read_input(["~q"]))
+
+  let assert Ok(StopDispatcher) = process.receive(dispatcher_subject, 0)
+}
+
+/// A line that merely starts with the sentinel isn't a match — the
+/// comparison is exact (after trimming trailing whitespace), not a prefix
+/// check.
+pub fn a_line_that_only_starts_with_the_sentinel_is_not_recognized_test() {
+  let dispatcher_subject = process.new_subject()
+
+  reader.read_loop(dispatcher_subject, scripted_read_input(["~quitter\n"]))
+
+  let assert Ok(AddJob("~quitter\n")) = process.receive(dispatcher_subject, 0)
 }
 //-----------------------------------------------------------------------------

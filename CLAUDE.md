@@ -100,9 +100,10 @@ draining a backlog has no bound. It's the caller that started the
 dispatcher's job to call it (see `streams.gleam`'s `main`, which does so
 after `reader.read_loop` returns and before stopping the writer) —
 `reader.gleam` itself still only fire-and-forgets `StopDispatcher` on the
-quit sentinel and does not wait. See `docs/todo.md` for the one remaining
-known gap (a fragile quit-sentinel match in `reader`) before touching that
-code.
+quit sentinel and does not wait. The quit sentinel is `~quit` or its
+abbreviation `~q`, matched after trimming trailing line-ending whitespace
+so it's recognized whether or not the input's last line has a trailing
+newline (`reader.gleam`'s `is_quit_sentinel`).
 
 ### `shared/hlc` — hybrid logical clock
 
@@ -232,7 +233,6 @@ failure is meant to crash the actor/test rather than be handled.
   work for the language front end and PostgreSQL codegen.
 - `docs/hlc/spec.md`, `docs/hlc/implementation-plan.md` — HLC algorithm and
   planned work.
-- `docs/todo.md` — outstanding code-review findings (currently all in
-  `shared/src/asyncio/`).
+- `docs/todo.md` — outstanding code-review findings (currently none).
 - `docs/references.md` — external references (CloudEvents, EventQL,
   PostgreSQL syntax docs) informing the design.
