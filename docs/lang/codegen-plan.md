@@ -6,19 +6,20 @@ text. Read `spec.md` and `implementation-plan.md` first — this plan builds
 directly on `token`/`lexer`/`ast`/`parser`/`catalog`/`semantic` as they
 exist today and doesn't re-derive their design decisions.
 
-**Note on package layout**: this plan is still unbuilt, and was written
-before `lang/` split across `shared`/`schema`/`streams` (see
+**Status: implemented**, as `shared/src/lang/expr_codegen.gleam` +
+`schema/src/lang/ddl_codegen.gleam` + `streams/src/lang/dml_codegen.gleam`,
+per the split "Module layout" below settled on. This plan was originally
+written before `lang/` split across `shared`/`schema`/`streams` (see
 `implementation-plan.md`'s own "Note on package layout" and CLAUDE.md's
-"The StruoDB query language front end"). It still refers throughout to a
-single `ast`/`parser`/`catalog`/`semantic` and one `src/lang/codegen.gleam`
-— read those as shorthand for "the expr/DDL/DML modules, wherever they now
-live" rather than literal paths; "Module layout" below proposes how
-`codegen.gleam` itself should probably split along the same line before
-anyone starts implementing it, and "Issues" adds the one new question the
-split raises that this plan doesn't resolve: whether one `generate` call
-is still expected to mix `CREATE STREAM`/`ALTER STREAM` and `INSERT` in
-the same input, now that validating each needs a different package's
-parser/semantics.
+"The StruoDB query language front end") and still refers in a few places
+to a single `ast`/`parser`/`catalog`/`semantic` and one
+`src/lang/codegen.gleam` predating that split — read those as shorthand
+for "the expr/DDL/DML modules, wherever they now live" rather than
+literal paths. The "Issues" question the split originally raised (whether
+one `generate` call needs to accept mixed `CREATE STREAM`/`ALTER STREAM`/
+`INSERT` input) is resolved: no — DDL and DML statements are never mixed
+in a single source, so the two independent entry points below are the
+final shape, not a stopgap.
 
 ## Scope
 
@@ -165,10 +166,10 @@ parser/semantics.
 
 As originally planned, one `src/lang/codegen.gleam` under a single
 package. Given the split `lang/` actually has now (see the note above),
-codegen should follow the same line — reusable expression/data-type
+codegen instead follows the same line — reusable expression/data-type
 rendering in `shared`, statement-family-specific rendering and drivers in
 `schema`/`streams` — rather than being written as one new file that would
-have to import both `schema` and `streams` (a dependency direction
+have had to import both `schema` and `streams` (a dependency direction
 nothing else in this codebase takes) just to see both `DdlStatement` and
 `DmlStatement`:
 
@@ -514,58 +515,49 @@ treats its own worked examples as living documentation.)
 
 ## Step-by-step build order
 
-1. `ddl_parser.gleam`/`dml_parser.gleam`: extract `parse_one_statement`,
+Built in exactly this order; each step's own tests passed before moving
+to the next.
+
+1. ~~`ddl_parser.gleam`/`dml_parser.gleam`: extract `parse_one_statement`,
    add `pub fn parse_many` to each + tests (multi-statement input, the
-   semicolon-in-a-string-literal case, empty input).
-2. `shared/src/lang/expr_codegen.gleam`: `data_type_to_sql`,
+   semicolon-in-a-string-literal case, empty input).~~
+2. ~~`shared/src/lang/expr_codegen.gleam`: `data_type_to_sql`,
    `quote_identifier`, `quote_string_literal` + tests — pure,
-   independently testable, no dependency on the rest of codegen.
-3. `expr_to_sql` (same module) + precedence-aware reparenthesization +
+   independently testable, no dependency on the rest of codegen.~~
+3. ~~`expr_to_sql` (same module) + precedence-aware reparenthesization +
    tests — the most subtle part, same reasoning as why the parent plan
-   built the parser's expression grammar before its statement grammars.
-4. `schema/src/lang/ddl_codegen.gleam`'s `create_stream_to_sql` /
+   built the parser's expression grammar before its statement grammars.~~
+4. ~~`schema/src/lang/ddl_codegen.gleam`'s `create_stream_to_sql` /
    `alter_stream_to_sql` + tests against the §9.7/§10.7 worked examples
-   above.
-5. `streams/src/lang/dml_codegen.gleam`'s `insert_to_sql` + tests against
-   the §11.7 worked example.
-6. `generate` / `generate_standalone` (the `validate_all`/`render_all`
+   above.~~
+5. ~~`streams/src/lang/dml_codegen.gleam`'s `insert_to_sql` + tests against
+   the §11.7 worked example.~~
+6. ~~`generate` / `generate_standalone` (the `validate_all`/`render_all`
    driver) in both `ddl_codegen.gleam` and `dml_codegen.gleam` + tests,
-   including every `CodegenError` variant in each.
-7. `gleam test` in `shared`, `schema`, and `streams`; then a manual smoke
-   check: feed the §9.7/§10.7 pair through `schema/ddl_codegen.
-   generate_standalone` and the §11.7 example through
-   `streams/dml_codegen.generate` (against the first call's `Catalog`),
-   diffing both results against the "Worked examples" block by eye.
+   including every `CodegenError` variant in each.~~
+7. ~~`gleam test` in `shared`, `schema`, and `streams`~~ — all three pass
+   in full (`expr_codegen_test.gleam`/`ddl_codegen_test.gleam`/
+   `dml_codegen_test.gleam` directly assert the exact "Worked examples"
+   text below, so the manual smoke-check step this originally called for
+   is now redundant with the test suite itself.
 
 ## Issues
 
 Open questions and known gaps this plan doesn't resolve on its own —
 worth a decision before or during implementation:
 
-- **Does one `generate` call still need to accept mixed `CREATE STREAM`/
+- ~~Does one `generate` call still need to accept mixed `CREATE STREAM`/
   `ALTER STREAM`/`INSERT` input, now that DDL and DML live in separate
-  packages?** As originally planned (single package), `generate` validated
-  and rendered any mix of the three in one pass over one input string —
-  the "Worked examples" section's whole premise. As split, `ddl_codegen.
-  generate` only ever sees `DdlStatement`s and `dml_codegen.generate` only
-  `DmlStatement`s (see "Module layout"), so a single input string mixing
-  `CREATE STREAM` with `INSERT` has no single `generate` to hand it to
-  without one of `schema`/`streams` depending on the other purely for
-  codegen purposes — the same shape of problem `implementation-plan.md`'s
-  "Open questions" once flagged for `catalog.gleam` before a review
-  decoupled it from `ddl_ast` and moved it to `shared/`; no equivalent
-  decoupling is obvious here, since rendering `CREATE STREAM`/`ALTER
-  STREAM`/`INSERT` genuinely is schema-/streams-specific, unlike a
-  `Catalog`'s shape. If mixed input is
-  genuinely needed (e.g. a migration file that both alters a stream and
-  seeds it with data), the natural place for that orchestration is a new
-  layer above both packages — not `lang/` itself — that calls
-  `ddl_codegen.generate` and `dml_codegen.generate` in turn, splitting the
-  input by statement keyword first. If it isn't needed (each service only
-  ever processes its own statement family, per CLAUDE.md's stated service
-  boundaries), this plan's original "one `generate`, any mix" framing
-  should be dropped in favor of the two independent entry points already
-  reflected in "Module layout" above. Not resolved here.
+  packages?~~ — **resolved: no**. As originally planned (single package),
+  `generate` validated and rendered any mix of the three in one pass over
+  one input string — the "Worked examples" section's whole premise. As
+  built, `ddl_codegen.generate` only ever sees `DdlStatement`s and
+  `dml_codegen.generate` only `DmlStatement`s (see "Module layout"), and
+  the user confirmed DDL and DML statements are never mixed in a single
+  source — so the two independent entry points already reflected in
+  "Module layout" are the right shape, with no orchestration layer above
+  them needed. A single input string mixing `CREATE STREAM` with `INSERT`
+  was never actually going to occur, so there's no gap to close.
 - ~~Always-quote identifiers, or quote only when the content requires
   it?~~ — **resolved**: this plan originally defaulted to always-quoting,
   since a purely content-based heuristic (quote only if the string
@@ -635,6 +627,15 @@ worth a decision before or during implementation:
 - **Formatting details in general** (2-space indent, blank line between
   statements, trailing-comma-free/leading-comma-free column lists,
   upper-case keywords) are this plan's proposed house style, not
-  something spec.md or the parent plan constrains — worth confirming
-  before or shortly after implementation, since changing it later means
-  rewriting every literal-string test built against it.
+  something spec.md or the parent plan constrains — now locked in by the
+  literal-string tests built against them (`expr_codegen_test.gleam`,
+  `ddl_codegen_test.gleam`, `dml_codegen_test.gleam`); changing any of
+  them means updating those tests together, not a code change alone. Two
+  choices the plan text hadn't spelled out, settled during
+  implementation: symbolic unary operators (`+`/`-`/`~`) render with no
+  space before their operand (`-1`, `~a`), while the keyword one (`NOT`)
+  renders with one (`NOT a`); the level-7 keyword-operator forms
+  (`BETWEEN`/`IN`/`LIKE`/`ILIKE`/`SIMILAR TO`) negate by prefixing `NOT `
+  to the keyword itself (`a NOT BETWEEN b AND c`), while the level-9 `IS`
+  forms negate *after* `IS` (`a IS NOT NULL`, not `a NOT IS NULL`) —
+  matching each form's own grammar position for `NOT`, per spec.md §8.1.

@@ -398,4 +398,46 @@ pub fn generated_always_as_virtual_parses_test() {
     ..,
   ) = parse_ok("CREATE STREAM s (a INT, b INT GENERATED ALWAYS AS (a) VIRTUAL)")
 }
+
+//-----------------------------------------------------------------------------
+// parse_many
+//-----------------------------------------------------------------------------
+
+fn parse_many(
+  source: String,
+) -> Result(List(ast.DdlStatement), expr_parser.ParseError) {
+  let assert Ok(tokens) = lexer.tokenize(source)
+  ddl_parser.parse_many(token_stream.new(tokens))
+}
+
+pub fn parse_many_parses_each_statement_in_order_test() {
+  let assert Ok([
+    ast.CreateStream(name: "s", ..),
+    ast.AlterStream(name: "s", ..),
+  ]) = parse_many("CREATE STREAM s (a HLC); ALTER STREAM s DROP COLUMN a_note;")
+}
+
+pub fn parse_many_does_not_require_a_separating_semicolon_test() {
+  // Each statement's own trailing `;` is optional (§9.1/§10.1) — nothing
+  // in `parse_many` itself demands one between statements either.
+  let assert Ok([
+    ast.CreateStream(name: "s", ..),
+    ast.AlterStream(name: "s", ..),
+  ]) = parse_many("CREATE STREAM s (a HLC) ALTER STREAM s DROP COLUMN a_note")
+}
+
+pub fn parse_many_handles_a_semicolon_inside_a_string_literal_test() {
+  // The concrete regression test for "never split raw text on `;`"
+  // (docs/lang/codegen-plan.md) — a literal `;` inside a `CHECK`'s string
+  // expression must not be mistaken for a statement boundary.
+  let assert Ok([ast.CreateStream(..), ast.AlterStream(..)]) =
+    parse_many(
+      "CREATE STREAM s (a HLC, CONSTRAINT c CHECK (a != 'x;y'));
+       ALTER STREAM s DROP COLUMN a_note;",
+    )
+}
+
+pub fn parse_many_rejects_empty_input_test() {
+  let assert Error(expr_parser.UnexpectedEof(expected: _)) = parse_many("")
+}
 //-----------------------------------------------------------------------------

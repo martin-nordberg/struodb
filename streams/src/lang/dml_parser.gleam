@@ -16,12 +16,44 @@ import lang/token_stream.{type TokenStream} as ts
 //-----------------------------------------------------------------------------
 
 pub fn parse(tokstrm: TokenStream) -> Result(ast.DmlStatement, ParseError) {
-  use #(stmt, tokstrm1) <- result.try(case ts.current(tokstrm).kind {
-    token.Keyword(token.KwInsert) -> parse_insert(tokstrm)
-    _ -> Error(ep.fail(tokstrm, "INSERT"))
-  })
+  use #(stmt, tokstrm1) <- result.try(parse_one_statement(tokstrm))
   use _ <- result.try(ep.expect_eof(tokstrm1))
   Ok(stmt)
+}
+
+/// Parses one or more `INSERT` statements from `tokstrm`, in order — each
+/// statement's own grammar already makes its trailing `;` optional
+/// (§11.1), so this only needs to keep going for as long as there's more
+/// input, not require a separator between statements itself. Errors
+/// (`UnexpectedEof`, via `parse_one_statement`'s own `INSERT` failure) if
+/// `tokstrm` is just `Eof` — "one or more" isn't satisfied by zero.
+pub fn parse_many(
+  tokstrm: TokenStream,
+) -> Result(List(ast.DmlStatement), ParseError) {
+  use #(stmt, tokstrm1) <- result.try(parse_one_statement(tokstrm))
+  parse_many_loop([stmt], tokstrm1)
+}
+
+fn parse_many_loop(
+  acc: List(ast.DmlStatement),
+  tokstrm: TokenStream,
+) -> Result(List(ast.DmlStatement), ParseError) {
+  case ts.peek_kind(tokstrm, token.Eof) {
+    True -> Ok(list.reverse(acc))
+    False -> {
+      use #(stmt, tokstrm1) <- result.try(parse_one_statement(tokstrm))
+      parse_many_loop([stmt, ..acc], tokstrm1)
+    }
+  }
+}
+
+fn parse_one_statement(
+  tokstrm: TokenStream,
+) -> Result(#(ast.DmlStatement, TokenStream), ParseError) {
+  case ts.current(tokstrm).kind {
+    token.Keyword(token.KwInsert) -> parse_insert(tokstrm)
+    _ -> Error(ep.fail(tokstrm, "INSERT"))
+  }
 }
 
 //-----------------------------------------------------------------------------

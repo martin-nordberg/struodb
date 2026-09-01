@@ -274,4 +274,42 @@ pub fn insert_without_a_column_list_is_a_parse_error_test() {
   let assert Error(ep.UnexpectedToken(found: _, expected: _)) =
     parse("INSERT INTO s VALUES (1)")
 }
+
+//-----------------------------------------------------------------------------
+// parse_many
+//-----------------------------------------------------------------------------
+
+fn parse_many(source: String) -> Result(List(ast.DmlStatement), ep.ParseError) {
+  let assert Ok(tokens) = lexer.tokenize(source)
+  dml_parser.parse_many(token_stream.new(tokens))
+}
+
+pub fn parse_many_parses_each_statement_in_order_test() {
+  let assert Ok([
+    Insert(stream_name: "s", rows: [[ValueExpr(IntLiteral("1"))]], ..),
+    Insert(stream_name: "s", rows: [[ValueExpr(IntLiteral("2"))]], ..),
+  ]) = parse_many("INSERT INTO s (a) VALUES (1); INSERT INTO s (a) VALUES (2);")
+}
+
+pub fn parse_many_does_not_require_a_separating_semicolon_test() {
+  // Each statement's own trailing `;` is optional (§11.1) — nothing in
+  // `parse_many` itself demands one between statements either.
+  let assert Ok([Insert(stream_name: "s", ..), Insert(stream_name: "s", ..)]) =
+    parse_many("INSERT INTO s (a) VALUES (1) INSERT INTO s (a) VALUES (2)")
+}
+
+pub fn parse_many_handles_a_semicolon_inside_a_string_literal_test() {
+  // The concrete regression test for "never split raw text on `;`"
+  // (docs/lang/codegen-plan.md) — a literal `;` inside a string literal
+  // value must not be mistaken for a statement boundary.
+  let assert Ok([Insert(..), Insert(..)]) =
+    parse_many(
+      "INSERT INTO s (a) VALUES ('x;y');
+       INSERT INTO s (a) VALUES (2);",
+    )
+}
+
+pub fn parse_many_rejects_empty_input_test() {
+  let assert Error(ep.UnexpectedEof(expected: _)) = parse_many("")
+}
 //-----------------------------------------------------------------------------

@@ -392,16 +392,21 @@ fn lookup_keyword(text: String) -> Option(Keyword) {
   }
 }
 
-/// `text` is already folded to lower case by the caller, and already
-/// known (by `scan_identifier`) not to be one of StruoDB's own keywords.
-/// True for exactly the words spec.md §3.5 lists: PostgreSQL's own
-/// "reserved" and "reserved (can be function or type name)" keywords
+/// `text` is expected already folded to lower case by the caller. True
+/// for exactly the words spec.md §3.5 lists: PostgreSQL's own "reserved"
+/// and "reserved (can be function or type name)" keywords
 /// (https://www.postgresql.org/docs/current/sql-keywords-appendix.html,
 /// "PostgreSQL" column, as of PostgreSQL 18) — see §3.5 for why StruoDB
 /// rejects these unquoted rather than leaving the problem to the
 /// transpiler. Same `case`-over-literals style as `lookup_keyword` above,
 /// for the same reason.
-fn is_postgres_reserved_word(text: String) -> Bool {
+///
+/// Exported (unlike `lookup_keyword`, StruoDB's own keyword table) so
+/// `expr_codegen.gleam` can reuse this exact table for its own
+/// quoting decision — see `docs/lang/codegen-plan.md`'s
+/// identifier-quoting design decision for why codegen needs it too, not
+/// just the lexer.
+pub fn is_postgres_reserved_word(text: String) -> Bool {
   case text {
     "all"
     | "analyse"

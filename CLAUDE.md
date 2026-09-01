@@ -116,14 +116,17 @@ shared/src/lang/     token.gleam / lexer.gleam       — lexical layer
   (used by both       expr_ast.gleam / expr_parser.gleam — expr, data_type,
    schema & streams)                                    GeneratedClause, NamedCheck
                        expr_semantics.gleam            — column-reference checks
+                       expr_codegen.gleam              — expr/data_type -> SQL text
                        token_stream.gleam              — token cursor
                        catalog.gleam — a stream's declared shape
 
 schema/src/lang/     ddl_ast.gleam / ddl_parser.gleam    — CREATE/ALTER STREAM
   (DDL)               ddl_semantics.gleam
+                       ddl_codegen.gleam — DdlStatement -> CREATE/ALTER TABLE SQL
 
 streams/src/lang/    dml_ast.gleam / dml_parser.gleam    — INSERT
   (DML)               dml_semantics.gleam
+                       dml_codegen.gleam — DmlStatement -> INSERT INTO SQL
 ```
 
 A DDL statement's pipeline: `source text → shared/lexer.tokenize →
