@@ -3,7 +3,7 @@ import lang/token.{type Position, type Token, type TokenKind}
 //-----------------------------------------------------------------------------
 // A cursor over a token list — the mechanical part of hand-written
 // recursive descent (peek the current token, advance past it) that every
-// parser production in parser.gleam is built from.
+// parser production in expr_parser.gleam is built from.
 //-----------------------------------------------------------------------------
 
 pub opaque type TokenStream {

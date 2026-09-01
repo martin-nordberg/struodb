@@ -3,8 +3,9 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
-import lang/ast
 import lang/catalog.{type Catalog}
+import lang/ddl_ast as ast
+import lang/expr_ast as xast
 import lang/token.{type Span}
 
 //-----------------------------------------------------------------------------
@@ -41,27 +42,18 @@ pub type SemanticError {
   /// §10.4
   NarrowingTypeChange(
     column: String,
-    from: ast.DataType,
-    to: ast.DataType,
+    from: xast.DataType,
+    to: xast.DataType,
     span: Span,
   )
   /// §10.4 — a change between unrelated type families entirely.
   UnsupportedTypeChange(
     column: String,
-    from: ast.DataType,
-    to: ast.DataType,
+    from: xast.DataType,
+    to: xast.DataType,
     span: Span,
   )
   DropUnknownConstraint(name: String, span: Span)
-  InsertColumnListEmpty(span: Span)
-  InsertUnknownColumn(column: String, span: Span)
-  /// §11.4
-  InsertGeneratedColumnInList(column: String, span: Span)
-  /// §11.2
-  InsertMissingHlcColumn(stream: String, span: Span)
-  /// §11.2/§11.3 — `NOT NULL` with no default and no explicit value.
-  InsertMissingRequiredColumn(column: String, span: Span)
-  InsertColumnCountMismatch(expected: Int, got: Int, row_index: Int, span: Span)
   /// §9.1's `data_type` parameter bounds (`VARCHAR`/`CHAR` length >= 1;
   /// `DECIMAL`/`NUMERIC` precision >= 1, `0 <= scale <= precision`) —
   /// **not** in the implementation plan's own `SemanticError` listing,
@@ -76,15 +68,13 @@ pub type SemanticError {
 /// if there are none, `catalog` updated with `stmt`'s effect.
 pub fn analyze(
   cat: Catalog,
-  stmt: ast.Statement,
+  stmt: ast.DdlStatement,
 ) -> Result(Catalog, List(SemanticError)) {
   let errors = case stmt {
     ast.CreateStream(name:, elements:, span:) ->
       check_create_stream(name, elements, span)
     ast.AlterStream(name:, actions:, span:) ->
       check_alter_stream(cat, name, actions, span)
-    ast.Insert(stream_name:, columns:, rows:, span:, ..) ->
-      check_insert(cat, stream_name, columns, rows, span)
   }
   case errors {
     [] -> Ok(catalog.apply_statement(cat, stmt))
@@ -166,7 +156,7 @@ fn table_constraints(
 }
 
 fn hlc_columns(cols: List(ast.ColumnDef)) -> List(ast.ColumnDef) {
-  list.filter(cols, fn(c) { c.data_type == ast.DtHlc })
+  list.filter(cols, fn(c) { c.data_type == xast.DtHlc })
 }
 
 fn hlc_count_errors(
@@ -224,11 +214,11 @@ fn check_default_has_no_column_refs(col: ast.ColumnDef) -> List(SemanticError) {
 
 fn check_data_type_params(col: ast.ColumnDef) -> List(SemanticError) {
   case col.data_type {
-    ast.DtChar(length) -> check_length("CHAR", length, col)
-    ast.DtVarchar(length) -> check_length("VARCHAR", length, col)
-    ast.DtDecimal(precision:, scale:) ->
+    xast.DtChar(length) -> check_length("CHAR", length, col)
+    xast.DtVarchar(length) -> check_length("VARCHAR", length, col)
+    xast.DtDecimal(precision:, scale:) ->
       check_precision_scale("DECIMAL", precision, scale, col)
-    ast.DtNumeric(precision:, scale:) ->
+    xast.DtNumeric(precision:, scale:) ->
       check_precision_scale("NUMERIC", precision, scale, col)
     _ -> []
   }
@@ -394,7 +384,7 @@ fn check_add_column(
     False -> [AddColumnNeedsOptionalOrDefault(column: col.name, span: col.span)]
   }
   let second_hlc_err = case col.data_type {
-    ast.DtHlc -> [AddSecondHlcColumn(column: col.name, span: col.span)]
+    xast.DtHlc -> [AddSecondHlcColumn(column: col.name, span: col.span)]
     _ -> []
   }
 
@@ -427,7 +417,7 @@ fn check_drop_column(
 fn check_alter_column_type(
   schema: catalog.StreamSchema,
   column_name: String,
-  new_type: ast.DataType,
+  new_type: xast.DataType,
   span: Span,
 ) -> List(SemanticError) {
   case dict.get(schema.columns, column_name) {
@@ -473,30 +463,30 @@ type TypeChangeKind {
 /// narrowing, symmetrically. This is this plan's own extension, not
 /// something spec.md resolves — see "Remaining open details."
 fn classify_type_change(
-  old: ast.DataType,
-  new: ast.DataType,
+  old: xast.DataType,
+  new: xast.DataType,
 ) -> TypeChangeKind {
   case old, new {
-    ast.DtSmallint, ast.DtInt -> Widening
-    ast.DtSmallint, ast.DtInteger -> Widening
-    ast.DtSmallint, ast.DtBigint -> Widening
-    ast.DtInt, ast.DtInteger -> Widening
-    ast.DtInt, ast.DtBigint -> Widening
-    ast.DtInteger, ast.DtInt -> Widening
-    ast.DtInteger, ast.DtBigint -> Widening
-    ast.DtInt, ast.DtSmallint -> Narrowing
-    ast.DtInteger, ast.DtSmallint -> Narrowing
-    ast.DtBigint, ast.DtSmallint -> Narrowing
-    ast.DtBigint, ast.DtInt -> Narrowing
-    ast.DtBigint, ast.DtInteger -> Narrowing
-    ast.DtReal, ast.DtDouble -> Widening
-    ast.DtDouble, ast.DtReal -> Narrowing
-    ast.DtChar(o), ast.DtChar(n) ->
+    xast.DtSmallint, xast.DtInt -> Widening
+    xast.DtSmallint, xast.DtInteger -> Widening
+    xast.DtSmallint, xast.DtBigint -> Widening
+    xast.DtInt, xast.DtInteger -> Widening
+    xast.DtInt, xast.DtBigint -> Widening
+    xast.DtInteger, xast.DtInt -> Widening
+    xast.DtInteger, xast.DtBigint -> Widening
+    xast.DtInt, xast.DtSmallint -> Narrowing
+    xast.DtInteger, xast.DtSmallint -> Narrowing
+    xast.DtBigint, xast.DtSmallint -> Narrowing
+    xast.DtBigint, xast.DtInt -> Narrowing
+    xast.DtBigint, xast.DtInteger -> Narrowing
+    xast.DtReal, xast.DtDouble -> Widening
+    xast.DtDouble, xast.DtReal -> Narrowing
+    xast.DtChar(o), xast.DtChar(n) ->
       length_change(option.unwrap(o, 1), option.unwrap(n, 1))
-    ast.DtVarchar(o), ast.DtVarchar(n) -> varchar_length_change(o, n)
-    ast.DtDecimal(op, os), ast.DtDecimal(np, ns) ->
+    xast.DtVarchar(o), xast.DtVarchar(n) -> varchar_length_change(o, n)
+    xast.DtDecimal(op, os), xast.DtDecimal(np, ns) ->
       decimal_change(op, os, np, ns)
-    ast.DtNumeric(op, os), ast.DtNumeric(np, ns) ->
+    xast.DtNumeric(op, os), xast.DtNumeric(np, ns) ->
       decimal_change(op, os, np, ns)
     _, _ ->
       case old == new {
@@ -592,162 +582,51 @@ fn check_drop_constraint(
 // INSERT checks (spec.md §11)
 //-----------------------------------------------------------------------------
 
-fn check_insert(
-  cat: Catalog,
-  stream_name: String,
-  columns: List(String),
-  rows: List(List(ast.Value)),
-  span: Span,
-) -> List(SemanticError) {
-  case dict.get(cat.streams, stream_name) {
-    Error(Nil) -> [UnknownStream(name: stream_name, span: span)]
-    Ok(schema) -> {
-      // Neither the column list nor a `value_row` carries its own `Span`
-      // in the AST (see ast.gleam's `Insert`) — every error below that
-      // blames a specific column or row uses the statement's own `span`
-      // instead of a more local one.
-      let list_empty_err = case columns {
-        [] -> [InsertColumnListEmpty(span: span)]
-        _ -> []
-      }
-      let column_list_errs =
-        list.flat_map(columns, check_insert_column_list_entry(schema, _, span))
-      let hlc_missing_err = case list.contains(columns, schema.hlc_column) {
-        True -> []
-        False -> [InsertMissingHlcColumn(stream: stream_name, span: span)]
-      }
-      let missing_required_err =
-        list.flat_map(dict.to_list(schema.columns), fn(entry) {
-          check_insert_omitted_column(schema, columns, entry, span)
-        })
-      let expected = list.length(columns)
-      let count_errs =
-        list.flatten(
-          list.index_map(rows, fn(row, i) {
-            case list.length(row) == expected {
-              True -> []
-              False -> [
-                InsertColumnCountMismatch(
-                  expected: expected,
-                  got: list.length(row),
-                  row_index: i,
-                  span: span,
-                ),
-              ]
-            }
-          }),
-        )
-      let valid_names = dict.keys(schema.columns)
-      let ref_errs =
-        list.flat_map(rows, fn(row) {
-          list.flat_map(row, fn(value) {
-            case value {
-              ast.ValueExpr(expr) -> check_expr_column_refs(expr, valid_names)
-              ast.ValueDefault -> []
-            }
-          })
-        })
-
-      list.flatten([
-        list_empty_err,
-        column_list_errs,
-        hlc_missing_err,
-        missing_required_err,
-        count_errs,
-        ref_errs,
-      ])
-    }
-  }
-}
-
-fn check_insert_column_list_entry(
-  schema: catalog.StreamSchema,
-  column_name: String,
-  span: Span,
-) -> List(SemanticError) {
-  case dict.get(schema.columns, column_name) {
-    Error(Nil) -> [InsertUnknownColumn(column: column_name, span: span)]
-    Ok(col) ->
-      case col.generated {
-        None -> []
-        Some(_) -> [
-          InsertGeneratedColumnInList(column: column_name, span: span),
-        ]
-      }
-  }
-}
-
-/// A column not in the `INSERT`'s own column list resolves the same way
-/// a bare `DEFAULT` value would (§11.2): its own `DEFAULT`/`GENERATED`
-/// clause, `NULL` if `OPTIONAL`, or an error if neither. The `HLC`
-/// column is excluded here — its own absence is `InsertMissingHlcColumn`
-/// above, not this — and so are `GENERATED` columns, which may never
-/// appear in the column list at all (checked separately, above).
-fn check_insert_omitted_column(
-  schema: catalog.StreamSchema,
-  columns: List(String),
-  entry: #(String, catalog.ColumnSchema),
-  span: Span,
-) -> List(SemanticError) {
-  let #(name, col) = entry
-  case
-    name == schema.hlc_column
-    || option.is_some(col.generated)
-    || list.contains(columns, name)
-  {
-    True -> []
-    False ->
-      case col.optional || option.is_some(col.default) {
-        True -> []
-        False -> [InsertMissingRequiredColumn(column: name, span: span)]
-      }
-  }
-}
-
 //-----------------------------------------------------------------------------
 // Shared helpers
 //-----------------------------------------------------------------------------
 
 /// Every `ColumnRef` reachable inside `expr`, with its own span — the
 /// only kind of subexpression this module's checks ever need to blame
-/// individually; see the note on `Expr` in ast.gleam.
-fn collect_column_refs(expr: ast.Expr) -> List(#(String, Span)) {
+/// individually; see the note on `Expr` in xast.gleam.
+fn collect_column_refs(expr: xast.Expr) -> List(#(String, Span)) {
   case expr {
-    ast.IntLiteral(_)
-    | ast.NumericLiteral(_)
-    | ast.StringLiteral(_)
-    | ast.BoolLiteral(_)
-    | ast.NullLiteral -> []
-    ast.ColumnRef(name:, span:) -> [#(name, span)]
-    ast.UnaryOp(op: _, operand:) -> collect_column_refs(operand)
-    ast.BinaryOp(op: _, left:, right:) ->
+    xast.IntLiteral(_)
+    | xast.NumericLiteral(_)
+    | xast.StringLiteral(_)
+    | xast.BoolLiteral(_)
+    | xast.NullLiteral -> []
+    xast.ColumnRef(name:, span:) -> [#(name, span)]
+    xast.UnaryOp(op: _, operand:) -> collect_column_refs(operand)
+    xast.BinaryOp(op: _, left:, right:) ->
       list.append(collect_column_refs(left), collect_column_refs(right))
-    ast.Cast(expr:, data_type: _) -> collect_column_refs(expr)
-    ast.Between(expr:, negated: _, low:, high:) ->
+    xast.Cast(expr:, data_type: _) -> collect_column_refs(expr)
+    xast.Between(expr:, negated: _, low:, high:) ->
       list.flatten([
         collect_column_refs(expr),
         collect_column_refs(low),
         collect_column_refs(high),
       ])
-    ast.InList(expr:, negated: _, items:) ->
+    xast.InList(expr:, negated: _, items:) ->
       list.append(
         collect_column_refs(expr),
         list.flat_map(items, collect_column_refs),
       )
-    ast.Like(expr:, negated: _, case_insensitive: _, pattern:) ->
+    xast.Like(expr:, negated: _, case_insensitive: _, pattern:) ->
       list.append(collect_column_refs(expr), collect_column_refs(pattern))
-    ast.SimilarTo(expr:, negated: _, pattern:) ->
+    xast.SimilarTo(expr:, negated: _, pattern:) ->
       list.append(collect_column_refs(expr), collect_column_refs(pattern))
-    ast.IsNull(expr:, negated: _) -> collect_column_refs(expr)
-    ast.IsBool(expr:, negated: _, value: _) -> collect_column_refs(expr)
-    ast.IsDistinctFrom(left:, negated: _, right:) ->
+    xast.IsNull(expr:, negated: _) -> collect_column_refs(expr)
+    xast.IsBool(expr:, negated: _, value: _) -> collect_column_refs(expr)
+    xast.IsDistinctFrom(left:, negated: _, right:) ->
       list.append(collect_column_refs(left), collect_column_refs(right))
-    ast.FunctionCall(name: _, args:) -> list.flat_map(args, collect_column_refs)
+    xast.FunctionCall(name: _, args:) ->
+      list.flat_map(args, collect_column_refs)
   }
 }
 
 fn check_expr_column_refs(
-  expr: ast.Expr,
+  expr: xast.Expr,
   valid_names: List(String),
 ) -> List(SemanticError) {
   list.filter_map(collect_column_refs(expr), fn(ref) {

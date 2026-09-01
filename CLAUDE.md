@@ -8,25 +8,34 @@ StruoDB is a distributed event-source database, written in Gleam (targeting
 Erlang/OTP). It's a monorepo of five independent Gleam packages, each with
 its own `gleam.toml`, `manifest.toml`, and CI workflow:
 
-- **`shared/`** — library package with essentially all real logic so far:
-  an async I/O actor pipeline (`asyncio/`), a hybrid logical clock
-  (`hlc/`), and the StruoDB query language front end (`lang/`). Every
-  other package depends on it via `shared = { path = "../shared" }`.
+- **`shared/`** — library package with an async I/O actor pipeline
+  (`asyncio/`), a hybrid logical clock (`hlc/`), and the lexical/
+  expression layer of the StruoDB query language front end (`lang/` — see
+  "The StruoDB query language front end" below). Every other package
+  depends on it via `shared = { path = "../shared" }`.
 - **`schema/`** — application intended to handle schema-defining DDL
-  commands.
+  commands. Its `lang/` now has real `CREATE STREAM`/`ALTER STREAM`
+  parsing, semantic analysis, and catalog-tracking; the app's own `main`
+  is still the stub print below, not yet wired to any of it.
 - **`streams/`** — application intended to handle stream manipulation
-  commands.
+  commands. Its `lang/` now has real `INSERT` parsing and semantic
+  analysis, which is why `streams` also depends on `schema` (not just
+  `shared` — see below); `streams/src/streams.gleam`'s current `main` is
+  unrelated actor-pipeline demo code, not stream-manipulation logic wired
+  to any of it yet.
 - **`projections/`** — application intended to handle projection
   behaviors.
 - **`network/`** — application intended to maintain network configuration
   for the distributed database.
 
-`schema`, `streams`, `projections`, and `network` are currently stubs
-(a `main` that prints `"Hello from <name>!"` and a placeholder test) — they
-exist as the intended service boundaries but have no logic yet. When
-implementing DDL, stream manipulation, projection, or network features,
-expect to build them out from this stub state, likely pulling shared logic
-from (or into) `shared/`.
+`projections` and `network` are currently stubs (a `main` that prints
+`"Hello from <name>!"` and a placeholder test) — they exist as the
+intended service boundaries but have no logic yet. `schema` and `streams`
+have real language-front-end logic under `lang/` now (see below), but
+still no logic wired to their actual DDL/stream-manipulation purpose.
+When implementing DDL, stream manipulation, projection, or network
+features, expect to build them out from this state, likely pulling shared
+logic from (or into) `shared/`.
 
 Toolchain is pinned in `mise.toml`: Erlang 29, Gleam 1.18.
 
@@ -93,34 +102,68 @@ lexicographic-order-equals-value-order invariant (fixed-width, zero-padded
 fields; monotonic alphabet) is load-bearing — any change to field widths or
 the alphabet breaks it.
 
-### `shared/lang` — StruoDB query language front end
+### The StruoDB query language front end (`lang/`, split across `shared`/`schema`/`streams`)
 
 StruoDB's query language transpiles to PostgreSQL (see `docs/lang/spec.md`
-for the full grammar). The pipeline is:
+for the full grammar). Expression parsing (`expr`, `data_type`) is one
+grammar shared by two statement families with different package owners,
+so `lang/` exists in three places, split by what's reused vs. what's
+statement-family-specific — not kept in one module:
 
 ```
-source text → lexer (token.gleam types) → parser → ast.gleam Statement
-                                                        │
-                                                        ▼
-                                              semantic.gleam (validates)
-                                                        │
-                                                        ▼
-                                          catalog.gleam (tracks a stream's
-                                          declared shape as statements apply)
+shared/src/lang/     token.gleam / lexer.gleam       — lexical layer
+  (used by both       expr_ast.gleam / expr_parser.gleam — expr, data_type
+   schema & streams)  token_stream.gleam              — token cursor
+
+schema/src/lang/     ddl_ast.gleam / ddl_parser.gleam    — CREATE/ALTER STREAM
+  (DDL)               ddl_semantics.gleam
+                       catalog.gleam — a stream's declared shape
+
+streams/src/lang/    dml_ast.gleam / dml_parser.gleam    — INSERT
+  (DML)               dml_semantics.gleam
 ```
 
-- `token.gleam` / `lexer.gleam` — lexical layer: keywords are
+A DDL statement's pipeline: `source text → shared/lexer.tokenize →
+schema/ddl_parser.parse (which calls into shared/expr_parser for
+expressions/data types) → schema/ddl_ast.DdlStatement →
+schema/ddl_semantics.analyze (validates against a Catalog) →
+schema/catalog.apply_statement (records the resulting shape)`. `INSERT`
+follows the same shape one package over, through `streams/dml_parser` →
+`streams/dml_ast.DmlStatement` → `streams/dml_semantics.analyze` — which
+validates against a `Catalog` but never changes one, since an `INSERT`
+never alters a stream's shape.
+
+- `token.gleam` / `lexer.gleam` (shared) — lexical layer: keywords are
   case-insensitive, unquoted identifiers fold to lower case, quoted
   identifiers (`"..."`) are case-sensitive, matching PostgreSQL convention.
-- `ast.gleam` — pure data shapes only (`CreateStream`, `AlterStream`,
-  `Insert`, expressions, types); no logic. Read its header comment — it
-  explains why some shapes (e.g. `ColumnDef` vs `StreamElement`) are
-  structured the way they are for reuse across statement kinds.
-- `parser.gleam` — builds `ast.gleam` values from tokens.
-- `semantic.gleam` — validates a parsed `Statement` (currently the largest
-  module besides the parser).
-- `catalog.gleam` — tracks the accumulated, validated shape of a stream as
-  `CREATE STREAM`/`ALTER STREAM` statements are applied to it.
+- `expr_ast.gleam` / `expr_parser.gleam` (shared) — expressions and
+  `data_type` (spec.md §8–§9.1): pure data plus the precedence-layered
+  recursive-descent parser for them, reused as-is by both `ddl_parser`
+  and `dml_parser` (each also uses `expr_parser`'s `expect_*` cursor
+  helpers and `ParseError` type for its own statement-level grammar).
+  `token_stream.gleam` is the token-list cursor (peek/advance) every
+  parser production in `expr_parser`/`ddl_parser`/`dml_parser` is built
+  from.
+- `ddl_ast.gleam` / `ddl_parser.gleam` (schema) — `CreateStream`/
+  `AlterStream` shape (spec.md §9–§10) and the parser that builds it. Read
+  `ddl_ast.gleam`'s header comment — it explains why some shapes (e.g.
+  `ColumnDef` vs `StreamElement`) are structured the way they are for
+  reuse across `CREATE`/`ALTER`.
+- `dml_ast.gleam` / `dml_parser.gleam` (streams) — `Insert` shape (spec.md
+  §11) and its parser.
+- `ddl_semantics.gleam` (schema) / `dml_semantics.gleam` (streams) —
+  validate a parsed statement against a `Catalog`. The two currently
+  duplicate their `SemanticError` type and column-reference-collecting
+  helpers rather than sharing them (`dml_semantics`'s copy carries several
+  DDL-only variants it never raises) — a known simplification opportunity,
+  not yet acted on.
+- `catalog.gleam` (schema) — tracks the accumulated, validated shape of a
+  stream as `CREATE STREAM`/`ALTER STREAM` statements are applied to it.
+  Lives in `schema/`, next to the `ddl_ast` types `apply_statement`
+  operates on, rather than `shared/` — which is why `streams/gleam.toml`
+  depends on the whole `schema` package (not just `shared`) just to reach
+  it: `dml_semantics` needs the same `Catalog` to validate `INSERT`
+  against a stream's current shape.
 
 Only `CREATE STREAM`, `ALTER STREAM`, and `INSERT` are in scope so far;
 querying/subscribing to a stream's events is explicitly out of scope per

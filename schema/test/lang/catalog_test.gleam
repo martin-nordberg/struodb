@@ -2,8 +2,9 @@ import gleam/dict
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
-import lang/ast
 import lang/catalog
+import lang/ddl_ast as ast
+import lang/expr_ast as xast
 import lang/token
 
 //-----------------------------------------------------------------------------
@@ -16,13 +17,13 @@ fn dummy_span() -> token.Span {
 /// Built directly, not via the lexer/parser — catalog.gleam only ever
 /// operates on a `Statement`, regardless of where it came from, and this
 /// keeps these tests independent of parser correctness.
-fn sensor_reading_create() -> ast.Statement {
+fn sensor_reading_create() -> ast.DdlStatement {
   ast.CreateStream(
     name: "sensor_reading",
     elements: [
       ast.Column(ast.ColumnDef(
         name: "reading_hlc",
-        data_type: ast.DtHlc,
+        data_type: xast.DtHlc,
         optional: False,
         default: None,
         generated: None,
@@ -31,17 +32,17 @@ fn sensor_reading_create() -> ast.Statement {
       )),
       ast.Column(ast.ColumnDef(
         name: "reading",
-        data_type: ast.DtReal,
+        data_type: xast.DtReal,
         optional: False,
         default: None,
         generated: None,
         checks: [
           ast.NamedCheck(
             "reading_in_range",
-            ast.BinaryOp(
-              ast.CmpGt,
-              ast.ColumnRef("reading", dummy_span()),
-              ast.IntLiteral("0"),
+            xast.BinaryOp(
+              xast.CmpGt,
+              xast.ColumnRef("reading", dummy_span()),
+              xast.IntLiteral("0"),
             ),
             dummy_span(),
           ),
@@ -50,7 +51,7 @@ fn sensor_reading_create() -> ast.Statement {
       )),
       ast.Column(ast.ColumnDef(
         name: "units",
-        data_type: ast.DtVarchar(Some(32)),
+        data_type: xast.DtVarchar(Some(32)),
         optional: False,
         default: None,
         generated: None,
@@ -60,10 +61,10 @@ fn sensor_reading_create() -> ast.Statement {
       ast.TableConstraint(
         check: ast.NamedCheck(
           "units_not_empty",
-          ast.BinaryOp(
-            ast.CmpNeBang,
-            ast.ColumnRef("units", dummy_span()),
-            ast.StringLiteral(""),
+          xast.BinaryOp(
+            xast.CmpNeBang,
+            xast.ColumnRef("units", dummy_span()),
+            xast.StringLiteral(""),
           ),
           dummy_span(),
         ),
@@ -98,11 +99,11 @@ pub fn create_stream_produces_the_right_schema_test() {
     ]
 
   let assert Ok(reading) = dict.get(schema.columns, "reading")
-  assert reading.data_type == ast.DtReal
+  assert reading.data_type == xast.DtReal
   assert reading.optional == False
 
   let assert Ok(hlc) = dict.get(schema.columns, "reading_hlc")
-  assert hlc.data_type == ast.DtHlc
+  assert hlc.data_type == xast.DtHlc
 }
 
 //-----------------------------------------------------------------------------
@@ -114,7 +115,7 @@ pub fn add_column_adds_a_new_column_and_leaves_the_rest_unchanged_test() {
     ast.AddColumn(
       ast.ColumnDef(
         name: "notes",
-        data_type: ast.DtVarchar(None),
+        data_type: xast.DtVarchar(None),
         optional: True,
         default: None,
         generated: None,
@@ -161,7 +162,7 @@ pub fn alter_column_type_updates_only_that_columns_type_test() {
       actions: [
         ast.AlterColumnType(
           column_name: "units",
-          data_type: ast.DtVarchar(Some(64)),
+          data_type: xast.DtVarchar(Some(64)),
           span: dummy_span(),
         ),
       ],
@@ -171,14 +172,14 @@ pub fn alter_column_type_updates_only_that_columns_type_test() {
   let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
 
   let assert Ok(units) = dict.get(schema.columns, "units")
-  assert units.data_type == ast.DtVarchar(Some(64))
+  assert units.data_type == xast.DtVarchar(Some(64))
   let assert Ok(reading) = dict.get(schema.columns, "reading")
-  assert reading.data_type == ast.DtReal
+  assert reading.data_type == xast.DtReal
 }
 
 pub fn add_constraint_adds_a_new_constraint_test() {
   let check =
-    ast.NamedCheck("units_at_most_64", ast.BoolLiteral(True), dummy_span())
+    ast.NamedCheck("units_at_most_64", xast.BoolLiteral(True), dummy_span())
   let stmt =
     ast.AlterStream(
       name: "sensor_reading",
@@ -234,30 +235,5 @@ pub fn multiple_actions_in_one_statement_all_apply_test() {
 
   assert sorted_keys(schema.columns) == ["reading", "reading_hlc"]
   assert sorted_keys(schema.constraints) == ["reading_in_range"]
-}
-
-//-----------------------------------------------------------------------------
-// INSERT
-//-----------------------------------------------------------------------------
-
-pub fn insert_does_not_change_the_catalog_test() {
-  let before = base_catalog()
-  let stmt =
-    ast.Insert(
-      stream_name: "sensor_reading",
-      columns: ["reading_hlc", "reading", "units"],
-      rows: [
-        [
-          ast.ValueExpr(ast.StringLiteral("01a2B3c4D5e6f70abcde")),
-          ast.ValueExpr(ast.IntLiteral("1")),
-          ast.ValueExpr(ast.StringLiteral("celsius")),
-        ],
-      ],
-      on_conflict_do_nothing: False,
-      returning: None,
-      span: dummy_span(),
-    )
-  let after = catalog.apply_statement(before, stmt)
-  assert after == before
 }
 //-----------------------------------------------------------------------------

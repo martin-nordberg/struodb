@@ -137,7 +137,7 @@ pub type Operator {
   Le
   Ge
   /// `<>` — kept distinct from `NeBang`; see the note in lexer.gleam and
-  /// `BinaryOperator`'s `CmpNeAngle` in ast.gleam.
+  /// `BinaryOperator`'s `CmpNeAngle` in expr_ast.gleam.
   NeAngle
   /// `!=`
   NeBang
@@ -152,7 +152,7 @@ pub type Operator {
   /// the lexical level (see the note in lexer.gleam). The **parser**
   /// resolves which meaning applies from position (prefix vs. infix),
   /// producing `UnaryOperator.BitNot` or `BinaryOperator.RegexMatchOp`
-  /// (ast.gleam) accordingly — so this token type has no separate
+  /// (expr_ast.gleam) accordingly — so this token type has no separate
   /// `RegexMatch` variant to keep in sync with `Tilde`.
   Tilde
   Shl

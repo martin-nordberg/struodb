@@ -1,41 +1,38 @@
-import gleam/list
 import gleam/option.{None, Some}
-import lang/ast.{
-  Add, AddColumn, AddConstraint, AlterColumnType, AlterStream, Between, BinaryOp,
-  BoolLiteral, Cast, Column, ColumnDef, ColumnRef, CreateStream, DropConstraint,
-  DtBigint, DtHlc, DtReal, DtTimestamptz, DtVarchar, FunctionCall,
-  GeneratedClause, InList, Insert, IntLiteral, IsBool, IsDistinctFrom, IsNull,
-  Like, LogicalNot, Mul, NamedCheck, Neg, NullLiteral, NumericLiteral, Pow,
-  ReturningExpr, ReturningStar, SimilarTo, Stored, StringLiteral,
-  TableConstraint, UnaryOp, ValueDefault, ValueExpr,
-}
+import lang/dml_ast.{
+  Insert, ReturningExpr, ReturningStar, ValueDefault, ValueExpr,
+} as ast
+import lang/dml_parser
+import lang/expr_ast.{
+  Add, Between, BinaryOp, BoolLiteral, Cast, ColumnRef, DtBigint, FunctionCall,
+  InList, IntLiteral, IsBool, IsDistinctFrom, IsNull, Like, LogicalNot, Mul, Neg,
+  NullLiteral, NumericLiteral, Pow, SimilarTo, StringLiteral, UnaryOp,
+} as xast
+import lang/expr_parser as ep
 import lang/lexer
-import lang/parser.{ExplicitNotNull, MissingGeneratedStorage, UnexpectedToken}
 import lang/token_stream
 
 //-----------------------------------------------------------------------------
 
-fn parse(source: String) -> Result(ast.Statement, parser.ParseError) {
+fn parse(source: String) -> Result(ast.DmlStatement, ep.ParseError) {
   let assert Ok(tokens) = lexer.tokenize(source)
-  parser.parse(token_stream.new(tokens))
+  dml_parser.parse(token_stream.new(tokens))
 }
 
-fn parse_ok(source: String) -> ast.Statement {
+fn parse_ok(source: String) -> ast.DmlStatement {
   let assert Ok(stmt) = parse(source)
   stmt
 }
 
-/// Parses `expr_source` by embedding it in a minimal `CREATE STREAM`'s
-/// table-level `CHECK` clause and pulling the resulting `Expr` back out —
-/// `expr` only ever appears inside a statement, so this is the only way
-/// to exercise the expression grammar through the public `parse` API,
-/// same as any other caller would.
-fn parse_expr(expr_source: String) -> ast.Expr {
-  let source =
-    "CREATE STREAM s (a INT, CONSTRAINT c CHECK (" <> expr_source <> "))"
-  let assert CreateStream(elements: [_, TableConstraint(check: check, ..)], ..) =
-    parse_ok(source)
-  check.expr
+/// Parses `expr_source` by embedding it in a minimal `INSERT`'s `VALUES`
+/// row and pulling the resulting `Expr` back out — `expr` only ever
+/// appears inside a statement, so this is the only way to exercise the
+/// expression grammar through the public `parse` API, same as any other
+/// caller would.
+fn parse_expr(expr_source: String) -> xast.Expr {
+  let source = "INSERT INTO s (a) VALUES (" <> expr_source <> ")"
+  let assert Insert(_, _, [[ValueExpr(expr)]], _, _, _) = parse_ok(source)
+  expr
 }
 
 //-----------------------------------------------------------------------------
@@ -148,7 +145,7 @@ pub fn function_call_with_no_args_test() {
 }
 
 pub fn parenthesized_expr_does_not_add_an_ast_node_test() {
-  // No `Paren(Expr)` wrapper — see the note on `Expr` in ast.gleam.
+  // No `Paren(Expr)` wrapper — see the note on `Expr` in expr_ast.gleam.
   let assert BinaryOp(
     Mul,
     BinaryOp(Add, ColumnRef("a", _), ColumnRef("b", _)),
@@ -172,7 +169,7 @@ pub fn multiplication_binds_tighter_than_addition_test() {
 pub fn prefix_tilde_binds_looser_than_addition_test() {
   // The PostgreSQL quirk: `~1 + 2` is `~(1 + 2)`, not `(~1) + 2`.
   assert parse_expr("~1 + 2")
-    == UnaryOp(ast.BitNot, BinaryOp(Add, IntLiteral("1"), IntLiteral("2")))
+    == UnaryOp(xast.BitNot, BinaryOp(Add, IntLiteral("1"), IntLiteral("2")))
 }
 
 pub fn prefix_minus_binds_tighter_than_addition_test() {
@@ -193,8 +190,8 @@ pub fn exponentiation_is_left_associative_test() {
 }
 
 pub fn comparison_is_non_associative_test() {
-  let assert Error(UnexpectedToken(found: _, expected: _)) =
-    parse("CREATE STREAM s (a INT, CONSTRAINT c CHECK (a < b < c))")
+  let assert Error(ep.UnexpectedToken(found: _, expected: _)) =
+    parse("INSERT INTO s (a) VALUES (a < b < c)")
 }
 
 pub fn not_between_negates_the_between_itself_test() {
@@ -211,134 +208,6 @@ pub fn outer_not_wraps_an_unnegated_between_test() {
     LogicalNot,
     Between(ColumnRef("a", _), False, ColumnRef("b", _), ColumnRef("c", _)),
   ) = parse_expr("NOT a BETWEEN b AND c")
-}
-
-//-----------------------------------------------------------------------------
-// CREATE STREAM (spec.md §9)
-//-----------------------------------------------------------------------------
-
-pub fn create_stream_example_round_trips_test() {
-  let source =
-    "CREATE STREAM sensor_reading (
-      reading_hlc HLC,
-      reading_time TIMESTAMPTZ GENERATED ALWAYS AS (TIMESTAMPTZ_FROM_HLC(reading_hlc)) STORED,
-      reading REAL CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100),
-      units VARCHAR(32),
-      sensor_id VARCHAR(24),
-      notes VARCHAR(200) OPTIONAL
-    );"
-
-  let assert CreateStream(
-    name: "sensor_reading",
-    elements: [
-      Column(ColumnDef(
-        name: "reading_hlc",
-        data_type: DtHlc,
-        optional: False,
-        default: None,
-        generated: None,
-        checks: [],
-        span: _,
-      )),
-      Column(ColumnDef(
-        name: "reading_time",
-        data_type: DtTimestamptz,
-        optional: False,
-        default: None,
-        generated: Some(GeneratedClause(
-          FunctionCall("timestamptz_from_hlc", [ColumnRef("reading_hlc", _)]),
-          Stored,
-        )),
-        checks: [],
-        span: _,
-      )),
-      Column(ColumnDef(
-        name: "reading",
-        data_type: DtReal,
-        optional: False,
-        default: None,
-        generated: None,
-        checks: [
-          NamedCheck(
-            "reading_in_range",
-            BinaryOp(
-              ast.LogicalAnd,
-              BinaryOp(ast.CmpGt, ColumnRef("reading", _), IntLiteral("0")),
-              BinaryOp(ast.CmpLe, ColumnRef("reading", _), IntLiteral("100")),
-            ),
-            _,
-          ),
-        ],
-        span: _,
-      )),
-      Column(ColumnDef(
-        name: "units",
-        data_type: DtVarchar(Some(32)),
-        optional: False,
-        default: None,
-        generated: None,
-        checks: [],
-        span: _,
-      )),
-      Column(ColumnDef(
-        name: "sensor_id",
-        data_type: DtVarchar(Some(24)),
-        optional: False,
-        default: None,
-        generated: None,
-        checks: [],
-        span: _,
-      )),
-      Column(ColumnDef(
-        name: "notes",
-        data_type: DtVarchar(Some(200)),
-        optional: True,
-        default: None,
-        generated: None,
-        checks: [],
-        span: _,
-      )),
-    ],
-    span: _,
-  ) = parse_ok(source)
-}
-
-pub fn explicit_not_null_is_a_friendly_diagnostic_test() {
-  let assert Error(ExplicitNotNull(span: _)) =
-    parse("CREATE STREAM s (a INT NOT NULL)")
-}
-
-pub fn missing_generated_storage_is_reported_test() {
-  let assert Error(MissingGeneratedStorage(span: _)) =
-    parse("CREATE STREAM s (a INT, b INT GENERATED ALWAYS AS (a + 1))")
-}
-
-pub fn double_without_precision_is_a_parse_error_test() {
-  let assert Error(UnexpectedToken(found: _, expected: _)) =
-    parse("CREATE STREAM s (a DOUBLE)")
-}
-
-//-----------------------------------------------------------------------------
-// ALTER STREAM (spec.md §10)
-//-----------------------------------------------------------------------------
-
-pub fn alter_stream_example_round_trips_test() {
-  let source =
-    "ALTER STREAM sensor_reading
-      ADD COLUMN calibration_id VARCHAR(24) OPTIONAL,
-      ALTER COLUMN units TYPE VARCHAR(64),
-      DROP CONSTRAINT reading_in_range,
-      ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90);"
-
-  let assert AlterStream(name: "sensor_reading", actions: actions, ..) =
-    parse_ok(source)
-  assert list.length(actions) == 4
-  let assert [
-    AddColumn(ColumnDef(name: "calibration_id", optional: True, ..), ..),
-    AlterColumnType("units", DtVarchar(Some(64)), _),
-    DropConstraint("reading_in_range", _),
-    AddConstraint(NamedCheck("reading_in_range", _, _)),
-  ] = actions
 }
 
 //-----------------------------------------------------------------------------
@@ -383,7 +252,7 @@ pub fn insert_returning_star_test() {
 }
 
 pub fn insert_without_a_column_list_is_a_parse_error_test() {
-  let assert Error(UnexpectedToken(found: _, expected: _)) =
+  let assert Error(ep.UnexpectedToken(found: _, expected: _)) =
     parse("INSERT INTO s VALUES (1)")
 }
 //-----------------------------------------------------------------------------

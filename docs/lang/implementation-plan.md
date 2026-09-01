@@ -6,6 +6,20 @@ parser, and semantic-analysis stages. Open questions raised along the way
 are cross-referenced inline and collected in one list at the end, the same
 way spec.md accumulates its own "Remaining open details."
 
+**Note on package layout**: this plan was written, and the "Module
+layout"/per-module sections below still read, as if `lang/` were one
+`src/lang/` under a single package. It isn't, as built: expression parsing
+(`token`/`lexer`/`expr_ast`/`expr_parser`/`token_stream`) lives in
+`shared/`, reused by `ddl_ast`/`ddl_parser`/`ddl_semantics`/`catalog` in
+`schema/` (CREATE/ALTER STREAM) and by `dml_ast`/`dml_parser`/
+`dml_semantics` in `streams/` (INSERT) — see CLAUDE.md's "The StruoDB
+query language front end" for the current physical layout and why the
+split happened where it did. The design decisions and per-check reasoning
+below are all still accurate; only file paths and the single `Statement`/
+`SemanticError` types (now `DdlStatement`+`DmlStatement`, and two
+independently-defined `SemanticError`s) have changed, called out inline
+below.
+
 ## Scope
 
 - **In scope**: tokenizing StruoDB source text (Part I of spec.md);
@@ -66,7 +80,7 @@ way spec.md accumulates its own "Remaining open details."
   the identifier `Token` in hand at the point it builds a `ColumnRef`, so
   capturing its span costs nothing extra. Spanning the other thirteen
   variants too was considered and rejected as disproportionate — see
-  "Expression-level spans: a narrower alternative" under `parser.gleam`.
+  "Expression-level spans: a narrower alternative" under `expr_parser.gleam`.
 - **Numeric literals keep their source text, not a parsed value.**
   `IntegerLiteral`/`NumericLiteral` tokens and AST nodes store the
   literal's text (digit-group separators stripped, per §4.2) rather than
@@ -94,42 +108,70 @@ way spec.md accumulates its own "Remaining open details."
   SQL runs — PostgreSQL's own truncation is encoding-aware and
   authoritative, so StruoDB re-implementing it would only risk getting a
   multi-byte edge case wrong for no benefit. The lexer keeps the full
-  text; only `semantic.gleam`'s duplicate-name check applies an
+  text; only `ddl_semantics.gleam`'s duplicate-name check applies an
   approximate truncation (`postgres_name`), purely to give an earlier,
   friendlier diagnostic than a PostgreSQL error at execution time — see
   "On not truncating in the lexer" under `lexer.gleam` below.
 
 ## Module layout
 
-```
-src/lang/
-  token.gleam       # Span, Token, TokenKind, Keyword, Operator — pure data
-  lexer.gleam       # tokenize: String -> Result(List(Token), LexError)
-  ast.gleam         # Statement, Expr, DataType, etc. — pure data
-  parser.gleam      # parse: List(Token) -> Result(Statement, ParseError)
-  catalog.gleam     # Catalog, StreamSchema, ColumnSchema + apply_statement
-  semantic.gleam    # analyze: Catalog, Statement -> Result(Catalog, List(SemanticError))
+As planned (single package) vs. as built (split by package — see the note
+above):
 
-test/lang/
-  token_test.gleam
-  lexer_test.gleam
-  ast_test.gleam        # (only if helper constructors below need direct tests)
-  parser_test.gleam
-  catalog_test.gleam
-  semantic_test.gleam
+```
+# As planned:                        # As built:
+src/lang/                            shared/src/lang/
+  token.gleam                          token.gleam       # unchanged
+  lexer.gleam                          lexer.gleam       # unchanged
+  ast.gleam                            expr_ast.gleam    # Expr/DataType/operators half of ast.gleam
+  parser.gleam                         expr_parser.gleam # expr/data_type half of parser.gleam
+                                        token_stream.gleam # extracted from parser.gleam's own
+                                                           # peek/advance plumbing (§parser.gleam
+                                                           # below never called this out as its own
+                                                           # module — a later cleanup pulled it out)
+  catalog.gleam                      schema/src/lang/
+  semantic.gleam (CREATE/ALTER half)   ddl_ast.gleam      # Statement/StreamElement/etc. half of ast.gleam,
+                                                           # renamed DdlStatement
+                                        ddl_parser.gleam  # CREATE/ALTER STREAM half of parser.gleam
+                                        ddl_semantics.gleam # CREATE/ALTER half of semantic.gleam
+                                        catalog.gleam     # moved here — see its own section below
+  semantic.gleam (INSERT half)       streams/src/lang/
+                                        dml_ast.gleam      # Insert/Value/ReturningItem half of ast.gleam,
+                                                           # renamed DmlStatement
+                                        dml_parser.gleam  # INSERT half of parser.gleam
+                                        dml_semantics.gleam # INSERT half of semantic.gleam — currently a
+                                                           # full copy of ddl_semantics.gleam's
+                                                           # SemanticError/helpers, not a shared type;
+                                                           # see "Open questions"
+
+test/lang/                           shared/test/lang/
+  token_test.gleam                     token_test.gleam   # still unbuilt, see below
+  lexer_test.gleam                     lexer_test.gleam
+  ast_test.gleam                       (none — no free-standing helper constructors to test)
+  parser_test.gleam                    expr_parser_test.gleam # expect_*/data_type only — see below
+                                        token_stream_test.gleam
+                                      schema/test/lang/
+  catalog_test.gleam                   catalog_test.gleam
+  semantic_test.gleam (CREATE/ALTER)   ddl_semantics_test.gleam
+                                        ddl_parser_test.gleam
+                                      streams/test/lang/
+  semantic_test.gleam (INSERT)         dml_semantics_test.gleam
+                                        dml_parser_test.gleam
 ```
 
-Each error type lives in the module that raises it (`LexError` in
-`lexer.gleam`, `ParseError` in `parser.gleam`, `SemanticError` in
-`semantic.gleam`) — matching `HlcError`/`Base62Error` living in
+Each error type still lives in the module that raises it (`LexError` in
+`lexer.gleam`; `ParseError` in `expr_parser.gleam`, reused by
+`ddl_parser.gleam`/`dml_parser.gleam` rather than redefined;
+`SemanticError` independently in both `ddl_semantics.gleam` and
+`dml_semantics.gleam`) — matching `HlcError`/`Base62Error` living in
 `clock.gleam`/`base62.gleam` rather than a shared `errors.gleam`. No
-facade module (no `src/lang.gleam`): callers `import lang/lexer`,
-`import lang/parser`, etc. directly, matching how `util/hlc/*` and
-`util/asyncio/*` are imported today.
+facade module (no `src/lang.gleam` in any of the three packages): callers
+`import lang/lexer`, `import lang/ddl_parser`, etc. directly, matching how
+`util/hlc/*` and `util/asyncio/*` are imported today.
 
 ---
 
-## `src/lang/token.gleam`
+## `shared/src/lang/token.gleam`
 
 Pure data, no logic beyond maybe an `Eq`-friendly shape (Gleam gives that
 for free on records/unions).
@@ -247,7 +289,7 @@ wrote, without needing a `Span`-based workaround to recover it later.
 
 ---
 
-## `src/lang/lexer.gleam`
+## `shared/src/lang/lexer.gleam`
 
 ```gleam
 pub type LexError {
@@ -336,7 +378,7 @@ identifier text, untruncated, all the way through tokens and the AST; the
 one place truncation-awareness still matters is the semantic layer's
 column/constraint-name uniqueness check, which needs to catch two
 identifiers that collide only *after* truncation — see
-`semantic.gleam`'s "Postgres-name" helper below. That check doesn't need
+`ddl_semantics.gleam`'s "Postgres-name" helper below. That check doesn't need
 to reproduce `pg_mbcliplen` exactly either: it exists purely to give an
 earlier, friendlier diagnostic than PostgreSQL's own error at execution
 time, so an approximate (codepoint-boundary, not necessarily
@@ -346,66 +388,21 @@ StruoDB, not that the transpiled program is wrong.
 
 ---
 
-## `src/lang/ast.gleam`
+## `shared/src/lang/expr_ast.gleam`, `schema/src/lang/ddl_ast.gleam`, `streams/src/lang/dml_ast.gleam`
+
+As planned, one `ast.gleam` held every type below. As built, it split
+along the same line as everything else in this doc's "package layout"
+note: `DataType`/`Expr`/`UnaryOperator`/`BinaryOperator` — reused by both
+statement families — live in `shared/src/lang/expr_ast.gleam`; the
+`CREATE`/`ALTER STREAM`-only shapes live in `schema/src/lang/ddl_ast.gleam`
+(and `Statement` is now `DdlStatement`, holding only `CreateStream`/
+`AlterStream` — no `Insert` case); the `INSERT`-only shapes live in
+`streams/src/lang/dml_ast.gleam` (as `DmlStatement`, holding only
+`Insert`). `ddl_ast.gleam` imports `expr_ast.gleam` (`as xast`, by
+convention) for `DataType`/`Expr`; so does `dml_ast.gleam`.
 
 ```gleam
-pub type Statement {
-  CreateStream(name: String, elements: List(StreamElement), span: Span)
-  AlterStream(name: String, actions: List(AlterAction), span: Span)
-  Insert(
-    stream_name: String,
-    columns: List(String),
-    rows: List(List(Value)),
-    on_conflict_do_nothing: Bool,
-    returning: Option(List(ReturningItem)),
-    span: Span,
-  )
-}
-
-pub type StreamElement {
-  ColumnDef(
-    name: String,
-    data_type: DataType,
-    optional: Bool,
-    default: Option(Expr),
-    generated: Option(GeneratedClause),
-    checks: List(NamedCheck),
-    span: Span,
-  )
-  TableConstraint(check: NamedCheck, span: Span)
-}
-
-pub type GeneratedClause {
-  GeneratedClause(expr: Expr, storage: GeneratedStorage)
-}
-
-pub type GeneratedStorage {
-  Stored
-  Virtual
-}
-
-pub type NamedCheck {
-  NamedCheck(constraint_name: String, expr: Expr, span: Span)
-}
-
-pub type AlterAction {
-  AddColumn(ColumnDef, span: Span)
-  DropColumn(column_name: String, span: Span)
-  AlterColumnType(column_name: String, data_type: DataType, span: Span)
-  AddConstraint(NamedCheck)
-  DropConstraint(constraint_name: String, span: Span)
-}
-
-pub type Value {
-  ValueExpr(Expr)
-  ValueDefault  // bare `DEFAULT` keyword, §11.3
-}
-
-pub type ReturningItem {
-  ReturningStar
-  ReturningExpr(expr: Expr, alias: Option(String))
-}
-
+// shared/src/lang/expr_ast.gleam
 pub type DataType {
   DtBigint
   DtBoolean
@@ -453,13 +450,14 @@ pub type Expr {
 
 `ColumnRef` is the one `Expr` variant that carries a `Span`, deliberately
 — see "Expression-level spans: a narrower alternative" under
-`parser.gleam` below for why the other thirteen variants don't. (No other
-`Expr` node needs one: nothing in this plan's semantic checks blames a
-literal, an operator, or a function call by itself — only ever "this
+`expr_parser.gleam` below for why the other thirteen variants don't. (No
+other `Expr` node needs one: nothing in this plan's semantic checks blames
+a literal, an operator, or a function call by itself — only ever "this
 column doesn't exist" or "this column can't be referenced here," both of
 which are about a `ColumnRef`.)
 
 ```gleam
+// shared/src/lang/expr_ast.gleam, continued
 pub type UnaryOperator {
   Pos          // unary `+`
   Neg          // unary `-`
@@ -508,24 +506,116 @@ needs to remember afterward, so `(a + b) * c` and a hypothetically
 differently-parenthesized-but-equivalent input both just produce
 `BinaryOp(Mul, BinaryOp(Add, a, b), c)`.
 
----
+```gleam
+// schema/src/lang/ddl_ast.gleam — imports expr_ast as xast
+pub type DdlStatement {
+  CreateStream(name: String, elements: List(StreamElement), span: Span)
+  AlterStream(name: String, actions: List(AlterAction), span: Span)
+}
 
-## `src/lang/parser.gleam`
+pub type StreamElement {
+  Column(ColumnDef)                          // renamed from a bare `ColumnDef` variant
+  TableConstraint(check: NamedCheck, span: Span)
+}
+
+pub type ColumnDef {
+  ColumnDef(
+    name: String,
+    data_type: xast.DataType,
+    optional: Bool,
+    default: Option(xast.Expr),
+    generated: Option(GeneratedClause),
+    checks: List(NamedCheck),
+    span: Span,
+  )
+}
+
+pub type GeneratedClause {
+  GeneratedClause(expr: xast.Expr, storage: GeneratedStorage)
+}
+
+pub type GeneratedStorage {
+  Stored
+  Virtual
+}
+
+pub type NamedCheck {
+  NamedCheck(constraint_name: String, expr: xast.Expr, span: Span)
+}
+
+pub type AlterAction {
+  AddColumn(ColumnDef, span: Span)
+  DropColumn(column_name: String, span: Span)
+  AlterColumnType(column_name: String, data_type: xast.DataType, span: Span)
+  AddConstraint(NamedCheck)
+  DropConstraint(constraint_name: String, span: Span)
+}
+```
+
+(As built, `ColumnDef` is its own standalone type rather than a
+`StreamElement` variant directly, so `AlterAction.AddColumn` can hold one
+without holding an entire `StreamElement` — see `ddl_ast.gleam`'s own
+header comment for the full reasoning. This plan's original phrasing
+["Read its header comment — it explains why `ColumnDef` vs `StreamElement`
+are structured the way they are"] anticipated exactly this.)
 
 ```gleam
+// streams/src/lang/dml_ast.gleam — imports expr_ast as xast
+pub type DmlStatement {
+  Insert(
+    stream_name: String,
+    columns: List(String),
+    rows: List(List(Value)),
+    on_conflict_do_nothing: Bool,
+    returning: Option(List(ReturningItem)),
+    span: Span,
+  )
+}
+
+pub type Value {
+  ValueExpr(xast.Expr)
+  ValueDefault  // bare `DEFAULT` keyword, §11.3
+}
+
+pub type ReturningItem {
+  ReturningStar
+  ReturningExpr(expr: xast.Expr, alias: Option(String))
+}
+```
+
+---
+
+## `shared/src/lang/expr_parser.gleam`
+
+```gleam
+// shared/src/lang/expr_parser.gleam
 pub type ParseError {
   UnexpectedToken(found: Token, expected: String)
   UnexpectedEof(expected: String)
   ExplicitNotNull(span: Span)     // friendly diagnostic — see below
   MissingGeneratedStorage(span: Span)  // GENERATED ALWAYS AS (...) with neither STORED nor VIRTUAL
 }
-
-pub fn parse(tokens: List(Token)) -> Result(Statement, ParseError)
 ```
 
+As planned, one `parse(tokens) -> Result(Statement, ParseError)` dispatched
+on `CREATE`/`ALTER`/`INSERT`. As built, `ParseError` and the whole
+expression/`data_type` grammar below live once, in `expr_parser.gleam`,
+but `pub fn parse` itself doesn't — each statement family owns its own:
+`ddl_parser.parse(tokstrm) -> Result(DdlStatement, ParseError)` (dispatch
+on `CREATE`/`ALTER`) in `schema/`, `dml_parser.parse(tokstrm) ->
+Result(DmlStatement, ParseError)` (dispatch on `INSERT`) in `streams/` —
+each `import`s `expr_parser.{type ParseError, ...}` (`as ep`, by
+convention) both for the error type and to call into the precedence-layered
+functions below for every expression/`data_type` they parse. Every
+`parse_*` function actually takes/returns a `token_stream.TokenStream`
+(`shared/src/lang/token_stream.gleam`'s cursor type — `peek_kind`/
+`peek_keyword`/`current`/`advance`), not a raw `List(Token)`, wrapped once
+via `token_stream.new` at the top of whichever `parse` a caller calls.
+
 Recursive descent, one token of lookahead for statement dispatch
-(`CREATE` / `ALTER` / `INSERT`) and most productions; the expression
-grammar needs 2-token lookahead in exactly one place (see level 7 below).
+(`CREATE` / `ALTER` / `INSERT`, wherever each package's own `parse` does
+it) and most productions; the expression grammar needs 2-token lookahead
+in exactly one place (see level 7 below).
 
 ### Expression parsing — precedence-layered recursive descent
 
@@ -614,12 +704,13 @@ items and function-call arguments, by contrast, sit inside explicit
 
 ### Expression-level spans: a narrower alternative
 
-`Expr` (§ast.gleam) carries no `Span` on any variant except `ColumnRef`.
-The alternative — a `span` field on all fourteen variants — was
-considered and rejected as disproportionate: no semantic check in this
+`Expr` (§expr_ast.gleam) carries no `Span` on any variant except
+`ColumnRef`. The alternative — a `span` field on all fourteen variants —
+was considered and rejected as disproportionate: no semantic check in this
 plan ever needs to blame a literal, an operator, or a function call by
 itself, only ever a specific column reference (`DefaultReferencesColumn`,
-`UnknownColumnReference` — see `semantic.gleam` below). Giving every
+`UnknownColumnReference` — see `ddl_semantics.gleam`/`dml_semantics.gleam`
+below). Giving every
 variant a span would mean threading a `Span` through all twelve of the
 precedence-layered parser functions above (each would need to remember
 its left operand's start position and merge it with the end position
@@ -634,7 +725,12 @@ name, the same treatment (a `span` field on that one variant only) can
 be added later without disturbing the other variants or their existing
 parser/test code.
 
-### Statement parsers
+### Statement parsers (`schema/src/lang/ddl_parser.gleam`, `streams/src/lang/dml_parser.gleam`)
+
+`parse_create_stream`/`parse_alter_stream` live in `ddl_parser.gleam`;
+`parse_insert` lives in `dml_parser.gleam` — each package's `pub fn parse`
+dispatches only within its own statement family (see the note under
+`expr_parser.gleam` above).
 
 - `parse_create_stream`: `CREATE STREAM` name, `(`, one-or-more
   `stream_element` separated by `,`, `)`, optional `;`. Each
@@ -688,7 +784,13 @@ straightforward to parse from:
 
 ---
 
-## `src/lang/catalog.gleam`
+## `schema/src/lang/catalog.gleam`
+
+Lives in `schema/`, not `shared/`, because `apply_statement` operates
+directly on `ddl_ast`'s `DdlStatement`/`StreamElement`/`AlterAction`
+types (below), which are themselves schema-only — see "Open questions"
+for why this then forces `streams/` to depend on the whole `schema`
+package just to read/write a `Catalog`.
 
 ```gleam
 pub type Catalog {
@@ -717,14 +819,14 @@ pub type ColumnSchema {
 pub fn empty() -> Catalog
 
 /// Folds one already-validated statement's effect into `catalog`. Callers
-/// are expected to call `semantic.analyze` first and only pass a
+/// are expected to call `ddl_semantics.analyze` first and only pass a
 /// statement here once it has come back `Ok` — `apply_statement` itself
-/// does not re-validate (see `semantic.gleam`, which calls this
+/// does not re-validate (see `ddl_semantics.gleam`, which calls this
 /// internally as its last step once every check has passed).
-fn apply_statement(catalog: Catalog, stmt: Statement) -> Catalog
+fn apply_statement(catalog: Catalog, stmt: DdlStatement) -> Catalog
 ```
 
-Kept as a separate module from `semantic.gleam` (rather than folding
+Kept as a separate module from `ddl_semantics.gleam` (rather than folding
 `Catalog` into that module directly) because "what a stream currently
 looks like" is a reusable concept a later codegen stage will also need
 (to know a column's current type when emitting `ALTER TABLE ... TYPE`,
@@ -732,9 +834,23 @@ for instance) — it shouldn't only exist as a side effect of validation.
 
 ---
 
-## `src/lang/semantic.gleam`
+## `schema/src/lang/ddl_semantics.gleam`, `streams/src/lang/dml_semantics.gleam`
+
+As planned, one `semantic.gleam` held one `SemanticError` type covering
+`CreateStream`/`AlterStream`/`Insert` together and one `analyze`. As
+built, each statement family owns its own module, its own `SemanticError`,
+and its own `analyze` — and, as of this writing, `dml_semantics.gleam`'s
+`SemanticError` is a **full copy** of `ddl_semantics.gleam`'s (all sixteen
+`CREATE`/`ALTER`-only variants included, none of which `dml_semantics`'
+`check_insert` ever constructs) rather than a type of its own holding only
+the `Insert`-relevant subset. Likewise `collect_column_refs`/
+`check_expr_column_refs` (the `Expr`-walking helpers immediately below)
+are copy-pasted verbatim into both modules. This is flagged as a
+known simplification opportunity in "Open questions" below, not
+something this plan resolves.
 
 ```gleam
+// schema/src/lang/ddl_semantics.gleam
 pub type SemanticError {
   MissingHlcColumn(stream: String, span: Span)
   MultipleHlcColumns(stream: String, first: String, second: String, span: Span)
@@ -745,7 +861,7 @@ pub type SemanticError {
   // Both `span` fields above are the offending `ColumnRef`'s own span,
   // not the enclosing `DEFAULT`/`CHECK`/`GENERATED` clause's — see
   // "Expression-level spans: a narrower alternative" under
-  // `parser.gleam`.
+  // `expr_parser.gleam`.
   DuplicateColumnName(stream: String, name: String, span: Span)
   DuplicateConstraintName(stream: String, name: String, span: Span)
   UnknownStream(name: String, span: Span)
@@ -756,6 +872,17 @@ pub type SemanticError {
   NarrowingTypeChange(column: String, from: DataType, to: DataType, span: Span)  // §10.4
   UnsupportedTypeChange(column: String, from: DataType, to: DataType, span: Span) // cross-family
   DropUnknownConstraint(name: String, span: Span)
+  InvalidDataTypeParameter(column: String, span: Span, reason: String)  // §9.1 param bounds
+}
+```
+
+```gleam
+// streams/src/lang/dml_semantics.gleam — as built, a full copy of the
+// above plus the four Insert-only variants below (see note above); as it
+// should probably look, holding only what check_insert actually raises:
+pub type SemanticError {
+  UnknownStream(name: String, span: Span)
+  UnknownColumnReference(referenced: String, span: Span)
   InsertColumnListEmpty(span: Span)
   InsertUnknownColumn(column: String, span: Span)
   InsertGeneratedColumnInList(column: String, span: Span)       // §11.4
@@ -763,17 +890,37 @@ pub type SemanticError {
   InsertMissingRequiredColumn(column: String, span: Span)       // §11.2/§11.3, NOT NULL with no default
   InsertColumnCountMismatch(expected: Int, got: Int, row_index: Int, span: Span)
 }
+```
 
+Each module has its own matching `analyze`:
+
+```gleam
+// ddl_semantics.gleam
 /// Validates `stmt` against `catalog` (its current declared shape, for
-/// `AlterStream`/`Insert`), returning every violation found — not just
-/// the first — or, if there are none, the `Catalog` updated with this
-/// statement's effect (a no-op update for `Insert`, which doesn't change
-/// a stream's shape).
+/// `AlterStream`), returning every violation found — not just the
+/// first — or, if there are none, the `Catalog` updated with this
+/// statement's effect.
 pub fn analyze(
-  catalog: Catalog,
-  stmt: Statement,
+  cat: Catalog,
+  stmt: DdlStatement,
 ) -> Result(Catalog, List(SemanticError))
 
+// dml_semantics.gleam
+/// Same shape, but `Insert` never changes a stream's shape, so a
+/// successful `analyze` always returns `catalog` unchanged.
+pub fn analyze(
+  cat: Catalog,
+  stmt: DmlStatement,
+) -> Result(Catalog, List(SemanticError))
+```
+
+`postgres_name`, by contrast, exists only in `ddl_semantics.gleam` — its
+column/constraint-name uniqueness checks are the only ones that need it
+(`dml_semantics.gleam`'s `check_insert` has no name-uniqueness rule of its
+own to apply it to):
+
+```gleam
+// schema/src/lang/ddl_semantics.gleam
 /// Approximates PostgreSQL's own 63-byte `NAMEDATALEN` truncation
 /// (§2), purely so column/constraint-name uniqueness checks below can
 /// catch a collision the way PostgreSQL will ultimately see it — two
@@ -927,16 +1074,59 @@ pass-through returning `catalog` unchanged on success.
 
 Each module gets its own `test/lang/*_test.gleam`, following the
 one-behavior-per-test-function style already used in
-`test/util/hlc/base62_test.gleam`.
+`test/util/hlc/base62_test.gleam`. As built, these live under
+`shared/test/lang/`, `schema/test/lang/`, or `streams/test/lang/`
+matching wherever the module itself lives (see "Module layout" above).
 
-### `token_test.gleam`
+### `shared/test/lang/token_test.gleam`
 
 - Only tests any shared helper logic `token.gleam` ends up with (e.g. a
   `Span` merge/combine helper, if one is added) — otherwise this module
   is pure data and most of its coverage naturally comes from
-  `lexer_test.gleam`.
+  `lexer_test.gleam`. Not yet built (no such helper exists), same as
+  planned.
 
-### `lexer_test.gleam`
+### `shared/test/lang/token_stream_test.gleam`
+
+Not in the original plan — added once `token_stream.gleam` was pulled out
+of `parser.gleam`'s own plumbing (see "Module layout"). Covers `current`/
+`advance` (including landing on `Eof` at the end of input), `peek_kind`/
+`peek_keyword` (both the match and no-match cases, plus a non-keyword
+token correctly reporting `False` from `peek_keyword` rather than crashing
+or matching by accident), and `consume_optional_semicolon` (both the
+present-and-consumed and absent-and-fallback-position branches).
+
+### `shared/test/lang/expr_parser_test.gleam`
+
+Not in the original plan as a single `parser_test.gleam` split out this
+way, but needed once `expr_parser.gleam` became a module of its own with
+no test file in the package it lives in — without it, `shared`'s own
+`gleam test` couldn't catch a regression in expression/`data_type`
+parsing, only `schema`'s and `streams`' could (via `ddl_parser_test.gleam`/
+`dml_parser_test.gleam` below, which exercise the same grammar but only
+indirectly, through each package's own statement wrapper). Deliberately
+narrow, covering only what those two don't duplicate:
+
+- `parse_or` as a direct entry point (a bare literal; that it leaves
+  trailing tokens for the caller rather than requiring EOF itself).
+- `data_type` (§9.1): every bare keyword; `CHAR`/`VARCHAR`'s optional
+  `(n)`; `DECIMAL`/`NUMERIC`'s optional `(p)`/`(p, s)`; `DOUBLE
+  PRECISION`'s two-keyword form and its `DOUBLE`-without-`PRECISION`
+  error; a non-type token's error.
+- The `expect_keyword`/`expect_punct`/`expect_identifier`/`expect_eof`/
+  `fail` cursor helpers directly — match and mismatch for each, since
+  every statement parser in `schema`/`streams` is built on these and
+  none of their own tests exercise the helpers' own contract in isolation.
+
+The full precedence table, the `~1 + 2`/`-1 + 2` contrast, non-associative
+comparison, and the `BETWEEN`/`NOT BETWEEN` cases stay exercised only
+through `ddl_parser_test.gleam` and `dml_parser_test.gleam` below (each
+wraps the same `expr` grammar differently — a `CREATE STREAM ... CHECK
+(...)` vs. an `INSERT ... VALUES (...)` — so between the two, both
+statement families' actual entry points into `expr_parser` get covered,
+at the cost of the same expression-level assertions appearing twice).
+
+### `shared/test/lang/lexer_test.gleam`
 
 - One keyword from each of §3.1–§3.4 tokenizes to its `Keyword` variant,
   case-insensitively (`CREATE`, `create`, `CrEaTe` all → `KwCreate`).
@@ -945,7 +1135,7 @@ one-behavior-per-test-function style already used in
 - An identifier longer than 63 bytes tokenizes with its **full** text
   intact (both unquoted and quoted forms) — the lexer does not truncate;
   see "On not truncating in the lexer" above. (The 63-byte collision case
-  is instead covered in `semantic_test.gleam`, via `postgres_name`.)
+  is instead covered in `ddl_semantics_test.gleam`, via `postgres_name`.)
 - Integer literal (`42`, `007`), numeric literal in all three forms
   (`3.14`, `3.`, `.14`), exponent suffix on both forms (`1e10` classified
   as `NumericLiteral` despite being integer-valued, per §4.2), and
@@ -966,7 +1156,15 @@ one-behavior-per-test-function style already used in
 - `UnknownCharacter` on an input character outside every recognized
   form (e.g. `$`, `@` on its own, a stray backslash).
 
-### `parser_test.gleam`
+### `schema/test/lang/ddl_parser_test.gleam`, `streams/test/lang/dml_parser_test.gleam`
+
+Both files exercise the *same* `expr_parser.gleam` grammar (see the note
+under `expr_parser_test.gleam` above) through their own package's actual
+`parse` entry point — `ddl_parser_test.gleam` wraps `expr_source` in
+`CREATE STREAM s (a INT, CONSTRAINT c CHECK (<expr_source>))`,
+`dml_parser_test.gleam` in `INSERT INTO s (a) VALUES (<expr_source>)` —
+so the bullets below (all but the last two) appear, essentially verbatim,
+in both files:
 
 - Each grammar alternative in §8.1 parses to the expected `Expr` shape
   for one representative input.
@@ -981,29 +1179,32 @@ one-behavior-per-test-function style already used in
   accidentally aligns their behavior fails a test immediately.
 - `2 ^ 3 ^ 2` = `(2^3)^2` (left-associative exponentiation, the
   PostgreSQL-matching non-standard case).
-- `a < b < c` is a parse error (non-associative comparison, §8.2).
+- `a < b < c` is a parse error (non-associative comparison, §8.2) —
+  tested through each file's own statement wrapper, not a bare `CREATE
+  STREAM` fed to `dml_parser.parse` (which would fail immediately on
+  statement dispatch instead, for the wrong reason).
 - `a NOT BETWEEN b AND c` parses as negated `Between`; `NOT a BETWEEN b
   AND c` parses as `LogicalNot(Between(a, ...))` — the two-token-lookahead
   case and the outer-`NOT` case land on different AST shapes as intended.
-- `CREATE STREAM` round-trips spec.md §9.7's example into the expected
-  `Statement`/`StreamElement` shapes, including the `GENERATED ALWAYS AS
-  (...) STORED` clause and the named `CHECK`.
-- `NOT NULL` written on a column produces `ExplicitNotNull`, not a
-  generic `UnexpectedToken`.
-- `GENERATED ALWAYS AS (expr)` with neither `STORED` nor `VIRTUAL`
-  produces `MissingGeneratedStorage`.
-- `ALTER STREAM` round-trips spec.md §10.7's example (four actions in one
-  statement, comma-separated).
-- `INSERT` round-trips spec.md §11.7's example, including
-  `ON CONFLICT DO NOTHING` and `RETURNING`.
-- `DOUBLE` not followed by `PRECISION` in a `data_type` position is a
-  parse error, not silently accepted as a standalone type.
-- Column list omitted entirely on `INSERT` (`INSERT INTO t VALUES (...)`)
-  is a parse error (§11.2's mandatory-column-list rule) — confirms the
-  grammar-level rejection, distinct from the (likely dead, per the note
-  above) semantic-level `InsertColumnListEmpty` check.
+- *(`ddl_parser_test.gleam` only)* `CREATE STREAM` round-trips spec.md
+  §9.7's example into the expected `DdlStatement`/`StreamElement` shapes,
+  including the `GENERATED ALWAYS AS (...) STORED` clause and the named
+  `CHECK`; `NOT NULL` written on a column produces `ExplicitNotNull`, not
+  a generic `UnexpectedToken`; `GENERATED ALWAYS AS (expr)` with neither
+  `STORED` nor `VIRTUAL` produces `MissingGeneratedStorage`; `ALTER
+  STREAM` round-trips spec.md §10.7's example (four actions in one
+  statement, comma-separated); `DOUBLE` not followed by `PRECISION` in a
+  `data_type` position is a parse error, not silently accepted as a
+  standalone type.
+- *(`dml_parser_test.gleam` only)* `INSERT` round-trips spec.md §11.7's
+  example, including `ON CONFLICT DO NOTHING` and `RETURNING`; the bare
+  `DEFAULT` keyword parses as `ValueDefault`; `RETURNING *` parses as
+  `ReturningStar`; column list omitted entirely (`INSERT INTO t VALUES
+  (...)`) is a parse error (§11.2's mandatory-column-list rule) —
+  confirms the grammar-level rejection, distinct from the (likely dead,
+  per the note above) semantic-level `InsertColumnListEmpty` check.
 
-### `catalog_test.gleam`
+### `schema/test/lang/catalog_test.gleam`
 
 - `apply_statement` on a `CreateStream` produces a `StreamSchema` with
   the right columns, `hlc_column`, and `constraints`.
@@ -1011,14 +1212,20 @@ one-behavior-per-test-function style already used in
   `AlterColumnType`/`AddConstraint`/`DropConstraint` each updates the
   right part of an existing `StreamSchema` and leaves the rest
   unchanged.
-- `apply_statement` on an `Insert` returns the catalog unchanged.
+- `apply_statement` on an `Insert` returns the catalog unchanged. (As
+  built, this one is instead implicit in `dml_semantics_test.gleam`'s own
+  `analyze` tests, since `apply_statement` for `Insert` lives in
+  `dml_semantics.gleam`, not `catalog.gleam`, which only ever sees
+  `DdlStatement`.)
 
-### `semantic_test.gleam`
+### `schema/test/lang/ddl_semantics_test.gleam`, `streams/test/lang/dml_semantics_test.gleam`
 
-One test per `SemanticError` variant listed above, each with a minimal
-`CreateStream`/`AlterStream`/`Insert` AST (built directly, not via the
-parser, to keep these tests independent of parser correctness) that
-should trigger exactly that error — plus:
+One test per `SemanticError` variant each module actually raises (see the
+two separate `SemanticError` types above), each with a minimal
+`CreateStream`/`AlterStream` (schema) or `Insert` (streams) AST (built
+directly, not via the parser, to keep these tests independent of parser
+correctness) that should trigger exactly that error — plus, in
+`ddl_semantics_test.gleam`:
 
 - A `CreateStream` with two independent violations (e.g. missing `HLC`
   column *and* an unknown column reference in a `CHECK`) reports **both**
@@ -1028,18 +1235,16 @@ should trigger exactly that error — plus:
   collision as expected; two columns whose names are identical only in
   their first 63 bytes (differing after that) still raise
   `DuplicateColumnName`; two columns whose names differ well within the
-  first 63 bytes do not.
+  first 63 bytes do not. (Only in `ddl_semantics_test.gleam` — the sole
+  module with a `postgres_name` to test; not duplicated in
+  `dml_semantics_test.gleam`, which has nothing of its own that calls it.)
 - spec.md §9.7's example `CREATE STREAM` analyzes clean (`Ok`), and the
   resulting catalog's `sensor_reading` schema has exactly the five
-  columns and one constraint the example declares.
-- Building on that catalog: spec.md §10.7's `ALTER STREAM` example
-  analyzes clean, and spec.md §11.7's `INSERT` example analyzes clean
-  against the altered catalog.
+  columns and one constraint the example declares. Building on that
+  catalog: spec.md §10.7's `ALTER STREAM` example analyzes clean too.
 - An `ALTER STREAM` widening `VARCHAR(64)` → `VARCHAR(32)` (shrinking)
   is `NarrowingTypeChange`; `INT` → `DECIMAL` (cross-family) is
   `UnsupportedTypeChange`.
-- An `INSERT` omitting the `HLC` column is `InsertMissingHlcColumn` even
-  when every other omitted column would otherwise resolve fine.
 - `UnknownColumnReference`'s `span` matches the offending `ColumnRef`'s
   own span, not the enclosing `CHECK`/`GENERATED` clause's — built with
   the reference nested inside a larger expression (e.g. `a AND
@@ -1047,9 +1252,23 @@ should trigger exactly that error — plus:
   would fail, confirming the check actually reads the `ColumnRef`'s span
   rather than falling back to the column's.
 
+`dml_semantics_test.gleam` adds:
+
+- An `INSERT` omitting the `HLC` column is `InsertMissingHlcColumn` even
+  when every other omitted column would otherwise resolve fine.
+- Continuing past spec.md §10.7's `ALTER STREAM` example (built via
+  `schema/ddl_parser` + `schema/ddl_semantics`, imported for exactly this
+  purpose — see "Open questions" on what that dependency costs): spec.md
+  §11.7's `INSERT` example analyzes clean against the resulting catalog,
+  all the way through `dml_semantics.analyze`.
+
 ---
 
 ## Step-by-step build order
+
+This was the original, single-package build order — historical at this
+point, since the package split (see "Module layout") happened after all
+six steps below were already built and passing:
 
 1. `src/lang/token.gleam` — types only, no logic.
 2. `src/lang/lexer.gleam` + `test/lang/lexer_test.gleam` — get this fully
@@ -1066,6 +1285,19 @@ should trigger exactly that error — plus:
    throwaway script) feeding spec.md's three worked examples (§9.7,
    §10.7, §11.7) end-to-end: `tokenize` → `parse` → `analyze`, confirming
    all three come back `Ok`.
+
+**What followed, not originally planned**: `ast.gleam` split into
+`expr_ast.gleam` (shared) + `ddl_ast.gleam` (schema) + `dml_ast.gleam`
+(streams); `parser.gleam` into `expr_parser.gleam` (shared) +
+`ddl_parser.gleam` (schema) + `dml_parser.gleam` (streams), pulling
+`token_stream.gleam`'s cursor out along the way; `catalog.gleam` moved
+from `shared/` to `schema/`; `semantic.gleam` split into
+`ddl_semantics.gleam` (schema) + `dml_semantics.gleam` (streams,
+depending on `schema` for `catalog.gleam`). See "Module layout" above for
+the resulting layout and "Open questions" below for what the split left
+unresolved (the `SemanticError`/helper duplication between the two
+`*_semantics.gleam` modules; `streams` depending on the whole `schema`
+package for `catalog.gleam` alone).
 
 ---
 
@@ -1104,14 +1336,14 @@ here — see that list directly) plus what this planning pass surfaced:
   ever blame individually, and the parser already holds the identifier
   `Token` when it builds a `ColumnRef`, so capturing the span is free.
   See "Expression-level spans: a narrower alternative" under
-  `parser.gleam`.
+  `expr_parser.gleam`.
 - ~~Mid-codepoint byte truncation~~ — **resolved, and dissolved rather
   than answered**: the lexer no longer truncates identifiers at all (see
   "On not truncating in the lexer"), since the transpiled SQL's
   correctness never depended on StruoDB replicating PostgreSQL's
   `pg_mbcliplen` — PostgreSQL truncates the full identifier itself,
   correctly, when the SQL runs. The only place approximate truncation
-  still appears is `semantic.gleam`'s `postgres_name` helper, used solely
+  still appears is `ddl_semantics.gleam`'s `postgres_name` helper, used solely
   for an early duplicate-name diagnostic; getting its boundary choice
   slightly different from PostgreSQL's own in a rare multi-byte edge case
   only costs a missed early warning, not correctness, so no further
@@ -1144,3 +1376,36 @@ here — see that list directly) plus what this planning pass surfaced:
   (§10.5) is unimplemented here entirely, pending spec.md's own
   unresolved decision on the verification mechanism (see spec.md's
   "Remaining open details" for the options under consideration).
+- **`ddl_semantics.gleam`/`dml_semantics.gleam`'s duplicated
+  `SemanticError`/`collect_column_refs`/`check_expr_column_refs`**
+  (surfaced by review once the package split landed — see "Module layout"
+  and the `*_semantics.gleam` section above) are two independently
+  maintained copies of what was one `semantic.gleam`. `dml_semantics`'
+  copy of `SemanticError` in particular carries sixteen variants it never
+  constructs. Options, in increasing order of how much they change: (a)
+  leave it — the duplication is currently harmless, just a sync hazard if
+  a shared rule (e.g. `UnknownColumnReference`'s wording) ever changes in
+  one copy and not the other; (b) prune `dml_semantics`'s `SemanticError`
+  to only the variants `check_insert` actually raises (no new module,
+  smallest change); (c) move `collect_column_refs`/
+  `check_expr_column_refs` (pure `Expr`-only traversal, no `Catalog`/AST
+  dependency) into `shared/src/lang/expr_ast.gleam` or a new
+  `shared/src/lang/expr_semantics.gleam`, so at least that half stops
+  being copy-pasted, independent of what happens to `SemanticError`
+  itself. Not resolved here.
+- **`streams` depends on the whole `schema` package just to reach
+  `catalog.gleam`.** `catalog.apply_statement` operates directly on
+  `ddl_ast`'s `DdlStatement`/`StreamElement`/`AlterAction` (schema-only
+  types), which is why `catalog.gleam` lives in `schema/` rather than
+  `shared/` — but `dml_semantics.gleam`'s `INSERT` checks need the same
+  `Catalog` to read a stream's current shape, so `streams/gleam.toml`
+  ends up depending on all of `schema` (its DDL parser and semantics
+  included) for that one module, contrary to CLAUDE.md's stated
+  architecture ("every other package depends on it via `shared`").
+  Decoupling `catalog.gleam` from `ddl_ast` — e.g. giving it its own
+  minimal "catalog effect" input type that `ddl_semantics.gleam`
+  translates a validated `DdlStatement` into before calling
+  `apply_statement` — would let `catalog.gleam` move back to `shared/`
+  and let `streams`' production code depend on just `shared`, at the cost
+  of a new type to keep in sync with `ddl_ast`. Not resolved here; a
+  design decision, not a mechanical fix.

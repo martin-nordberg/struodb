@@ -6,6 +6,20 @@ text. Read `spec.md` and `implementation-plan.md` first — this plan builds
 directly on `token`/`lexer`/`ast`/`parser`/`catalog`/`semantic` as they
 exist today and doesn't re-derive their design decisions.
 
+**Note on package layout**: this plan is still unbuilt, and was written
+before `lang/` split across `shared`/`schema`/`streams` (see
+`implementation-plan.md`'s own "Note on package layout" and CLAUDE.md's
+"The StruoDB query language front end"). It still refers throughout to a
+single `ast`/`parser`/`catalog`/`semantic` and one `src/lang/codegen.gleam`
+— read those as shorthand for "the expr/DDL/DML modules, wherever they now
+live" rather than literal paths; "Module layout" below proposes how
+`codegen.gleam` itself should probably split along the same line before
+anyone starts implementing it, and "Issues" adds the one new question the
+split raises that this plan doesn't resolve: whether one `generate` call
+is still expected to mix `CREATE STREAM`/`ALTER STREAM` and `INSERT` in
+the same input, now that validating each needs a different package's
+parser/semantics.
+
 ## Scope
 
 - **In scope**: given a string containing one or more `;`-separated
@@ -47,16 +61,18 @@ exist today and doesn't re-derive their design decisions.
   `semantic.analyze` purely to *validate* (discarding nothing from the
   original statements), then translate each already-validated
   `Statement` to SQL independently, with no further `Catalog` lookups.
-- **`parser.gleam` gains `pub fn parse_many`; `semantic.gleam` gains
-  nothing new.** Multi-statement parsing needs access to "parse one
-  statement, then report the leftover tokens" — currently private inside
-  `parser.gleam` (`pub fn parse` immediately asserts EOF after one
-  statement) — so that has to become new public API there. Folding
-  `semantic.analyze` over a `List(Statement)` with a threaded `Catalog`,
-  by contrast, is a three-line recursive fold any caller can write
-  itself; adding an `analyze_many` to `semantic.gleam` would grow its
-  public surface for no real reuse benefit, so that fold lives privately
-  in `codegen.gleam` instead.
+- **`ddl_parser.gleam`/`dml_parser.gleam` each gain their own `pub fn
+  parse_many`; `ddl_semantics.gleam`/`dml_semantics.gleam` gain nothing
+  new.** Multi-statement parsing needs access to "parse one statement,
+  then report the leftover tokens" — currently private inside each
+  package's own `parse` (which immediately asserts EOF after one
+  statement) — so that has to become new public API in both. Folding
+  `analyze` over a `List(DdlStatement)`/`List(DmlStatement)` with a
+  threaded `Catalog`, by contrast, is a three-line recursive fold any
+  caller can write itself; adding an `analyze_many` to either
+  `*_semantics.gleam` would grow its public surface for no real reuse
+  benefit, so that fold lives privately in `ddl_codegen.gleam`/
+  `dml_codegen.gleam` instead.
 - **Validation stops at the first statement that fails, not just the
   first check within it.** Within one statement, `semantic.analyze`
   already accumulates every independent violation (unchanged). Across
@@ -68,8 +84,9 @@ exist today and doesn't re-derive their design decisions.
   stream whose `CREATE STREAM` just failed). So codegen's driver reports
   exactly one statement's worth of `SemanticError`s per failed run, along
   with which statement (0-indexed) it was.
-- **Generated identifiers are always double-quoted.** `ast.gleam`'s name
-  fields (`Statement.name`, `ColumnDef.name`, `NamedCheck.constraint_name`,
+- **Generated identifiers are always double-quoted.** `ddl_ast.gleam`'s/
+  `dml_ast.gleam`'s name fields (`CreateStream.name`/`AlterStream.name`,
+  `Insert.stream_name`, `ColumnDef.name`, `NamedCheck.constraint_name`,
   etc.) are plain `String` with no memory of whether the source spelled
   them as a bare `Identifier` (already lower-cased by the lexer, §1) or a
   case-preserving `QuotedIdentifier` — that distinction is genuinely gone
@@ -97,15 +114,16 @@ exist today and doesn't re-derive their design decisions.
   "chosen specifically so the value fits a PostgreSQL `char(15)` column
   with no padding" — this is that decision cashed in, not a new one.
 - **StruoDB's precedence table doubles as the pretty-printer's
-  reparenthesization table.** `ast.gleam`'s `Expr` has no `Paren` node
-  (parenthesization is only ever a parsing-time concern) and most
+  reparenthesization table.** `expr_ast.gleam`'s `Expr` has no `Paren`
+  node (parenthesization is only ever a parsing-time concern) and most
   variants carry no `Span`, so regenerating correct PostgreSQL text means
   re-deriving *when* a child expression needs parentheses added back —
   purely from each operator's own precedence level. Since spec.md §8.2
   is defined to match PostgreSQL's own operator precedence table exactly
-  (that was the point), the same twelve levels `parser.gleam` already
-  encodes are the correct levels for this, with no separate table to
-  design or keep in sync.
+  (that was the point), the same twelve levels `expr_parser.gleam`
+  already encodes (shared/, so `expr_codegen.gleam` can sit right next to
+  it) are the correct levels for this, with no separate table to design
+  or keep in sync.
 - **Reparenthesization is conservative, not minimal.** Rather than the
   usual "only the right operand of a left-associative operator at the
   same precedence needs parens" refinement, every child is parenthesized
@@ -131,31 +149,48 @@ exist today and doesn't re-derive their design decisions.
 
 ## Module layout
 
+As originally planned, one `src/lang/codegen.gleam` under a single
+package. Given the split `lang/` actually has now (see the note above),
+codegen should follow the same line — reusable expression/data-type
+rendering in `shared`, statement-family-specific rendering and drivers in
+`schema`/`streams` — rather than being written as one new file that would
+have to import both `schema` and `streams` (a dependency direction
+nothing else in this codebase takes) just to see both `DdlStatement` and
+`DmlStatement`:
+
 ```
-src/lang/
-  codegen.gleam       # generate, generate_standalone; CodegenError
+shared/src/lang/
+  expr_codegen.gleam    # expr_to_sql, data_type_to_sql, quote_identifier,
+                         # quote_string_literal, reparenthesization — pure,
+                         # reused by both packages below
+
+schema/src/lang/
+  ddl_codegen.gleam     # create_stream_to_sql, alter_stream_to_sql,
+                         # generate/generate_standalone, CodegenError —
+                         # DdlStatement only
+
+streams/src/lang/
+  dml_codegen.gleam     # insert_to_sql, generate/generate_standalone,
+                         # CodegenError — DmlStatement only
 ```
 
-One new file. `codegen.gleam` builds output with `gleam/string_tree`
-(append-heavy construction, `string_tree.to_string` once at the end)
-rather than repeated `String` concatenation, matching how
-`gleam/string`'s own `replace` is implemented under the hood. If the
-statement-emission and expression-pretty-printing code grows unwieldy in
-one file, it can split into `codegen/statement.gleam` +
-`codegen/expr.gleam` later — not designed that way up front, since there's
-no evidence yet it needs to be.
+Each of `ddl_codegen.gleam`/`dml_codegen.gleam` builds output with
+`gleam/string_tree` (append-heavy construction, `string_tree.to_string`
+once at the end) rather than repeated `String` concatenation, matching how
+`gleam/string`'s own `replace` is implemented under the hood.
 
 ```gleam
+// schema/src/lang/ddl_codegen.gleam
 pub type CodegenError {
   LexFailure(lexer.LexError)
-  ParseFailure(parser.ParseError)
+  ParseFailure(ep.ParseError)
   /// `statement_index` is 0-based, counting only statements that were
   /// successfully parsed before this one failed to validate.
-  SemanticFailure(statement_index: Int, errors: List(semantic.SemanticError))
+  SemanticFailure(statement_index: Int, errors: List(ddl_semantics.SemanticError))
 }
 
 /// Validates every statement in `source` against `catalog` (threaded
-/// across them in order, exactly as calling `semantic.analyze`
+/// across them in order, exactly as calling `ddl_semantics.analyze`
 /// repeatedly would), and — only if every one of them passes — returns
 /// the equivalent formatted PostgreSQL for all of them concatenated, plus
 /// the resulting `Catalog`. Returning the catalog lets a caller processing
@@ -171,23 +206,38 @@ pub fn generate(
 pub fn generate_standalone(source: String) -> Result(String, CodegenError)
 ```
 
-### `parser.gleam` additions
+`streams/src/lang/dml_codegen.gleam` mirrors this shape exactly, against
+`DmlStatement`/`dml_semantics.SemanticError`/`ep.ParseError`, one package
+over. Whether a caller needing *both* (a migration/deploy tool driving
+`schema` and `streams` together) belongs in one of these two packages, a
+new orchestration layer, or stays entirely out of scope for `lang/`
+itself is the open question in "Issues" below — neither `generate` as
+sketched here attempts to accept mixed `CREATE STREAM`/`INSERT` input.
+
+### `ddl_parser.gleam`/`dml_parser.gleam` additions
 
 ```gleam
-/// Parses one or more `;`-separated statements from `tokens`, in order.
-/// Errors (`UnexpectedEof`, reusing the existing variant) if `tokens` is
-/// just `Eof` — "one or more" is not satisfied by zero.
-pub fn parse_many(tokens: List(Token)) -> Result(List(Statement), ParseError)
+/// Parses one or more `;`-separated statements from `tokens`, in order,
+/// all of the same statement family (`ddl_parser.parse_many` accepts only
+/// CREATE/ALTER STREAM; `dml_parser.parse_many` only INSERT). Errors
+/// (`UnexpectedEof`, reusing the existing `expr_parser.ParseError`
+/// variant) if `tokens` is just `Eof` — "one or more" is not satisfied by
+/// zero.
+pub fn parse_many(tokstrm: TokenStream) -> Result(List(DdlStatement), ParseError)
+// and, in dml_parser.gleam:
+pub fn parse_many(tokstrm: TokenStream) -> Result(List(DmlStatement), ParseError)
 ```
 
-Implemented by extracting the dispatch-and-return-leftover-tokens half of
-today's `parse` (everything before its own `expect_eof` call) into a
-private `parse_one_statement(tokens) -> Result(#(Statement, List(Token)), ParseError)`,
-which both `parse` (unchanged behavior: one statement, then require EOF)
-and the new `parse_many` (loop: parse one, check for `Eof` vs. more input,
-repeat) call. No change to any existing public signature or test.
+Each implemented by extracting the dispatch-and-return-leftover-tokens
+half of that package's own today's `parse` (everything before its own
+`expect_eof` call) into a private
+`parse_one_statement(tokstrm) -> Result(#(DdlStatement, TokenStream), ParseError)`
+(or `DmlStatement` in `dml_parser.gleam`), which both `parse` (unchanged
+behavior: one statement, then require EOF) and the new `parse_many` (loop:
+parse one, check for `Eof` vs. more input, repeat) call. No change to any
+existing public signature or test.
 
-### `codegen.gleam`'s internal driver
+### `ddl_codegen.gleam`'s internal driver
 
 ```gleam
 pub fn generate(catalog: Catalog, source: String) -> Result(#(String, Catalog), CodegenError) {
@@ -195,7 +245,7 @@ pub fn generate(catalog: Catalog, source: String) -> Result(#(String, Catalog), 
     lexer.tokenize(source) |> result.map_error(LexFailure),
   )
   use statements <- result.try(
-    parser.parse_many(tokens) |> result.map_error(ParseFailure),
+    ddl_parser.parse_many(token_stream.new(tokens)) |> result.map_error(ParseFailure),
   )
   use final_catalog <- result.try(validate_all(catalog, statements, 0))
   Ok(#(render_all(statements), final_catalog))
@@ -203,20 +253,20 @@ pub fn generate(catalog: Catalog, source: String) -> Result(#(String, Catalog), 
 
 fn validate_all(
   catalog: Catalog,
-  statements: List(Statement),
+  statements: List(DdlStatement),
   index: Int,
 ) -> Result(Catalog, CodegenError) {
   case statements {
     [] -> Ok(catalog)
     [stmt, ..rest] ->
-      case semantic.analyze(catalog, stmt) {
+      case ddl_semantics.analyze(catalog, stmt) {
         Ok(next_catalog) -> validate_all(next_catalog, rest, index + 1)
         Error(errors) -> Error(SemanticFailure(index, errors))
       }
   }
 }
 
-fn render_all(statements: List(Statement)) -> String {
+fn render_all(statements: List(DdlStatement)) -> String {
   statements
   |> list.map(statement_to_sql)
   |> string.join("\n\n")
@@ -321,27 +371,32 @@ the call's own).
 
 ## Test plan
 
-`test/lang/codegen_test.gleam`, matching the existing per-module test
+Three files, one per package, matching the existing per-module test
 files' one-behavior-per-function style:
+
+`shared/test/lang/expr_codegen_test.gleam`:
 
 - One test per `DataType` mapping row above (both the `Some`/bare forms
   where a type takes parameters).
 - Expression codegen: literal forms; each operator's textual spelling,
   including the `<>`/`!=` and `~`/regex-match distinctions; a
   precedence-driven reparenthesization case per adjacent pair of levels
-  (mirroring `parser_test.gleam`'s own precedence tests, but checking
-  output *text* against an expected string instead of an expected AST);
-  a function call, including zero-arg.
-- `CreateStream`/`AlterStream`/`Insert` codegen for spec.md's own §9.7/
-  §10.7/§11.7 examples, each checked against a fully literal expected
-  PostgreSQL string (see the worked examples below) — built by
-  constructing the `Statement` AST directly (independent of parser
-  correctness), matching how `semantic_test.gleam` tests are built.
-- `generate`/`generate_standalone` end to end: the same three examples
+  (mirroring `ddl_parser_test.gleam`'s/`dml_parser_test.gleam`'s own
+  precedence tests, but checking output *text* against an expected string
+  instead of an expected AST); a function call, including zero-arg.
+
+`schema/test/lang/ddl_codegen_test.gleam`:
+
+- `CreateStream`/`AlterStream` codegen for spec.md's own §9.7/§10.7
+  examples, each checked against a fully literal expected PostgreSQL
+  string (see the worked examples below) — built by constructing the
+  `DdlStatement` AST directly (independent of parser correctness),
+  matching how `ddl_semantics_test.gleam` tests are built.
+- `generate`/`generate_standalone` end to end: the two examples
   concatenated into one multi-statement input string, `;`-separated,
-  producing all three translations in order with the `Catalog` correctly
-  threaded (the `ALTER STREAM`/`INSERT` examples only validate against
-  the catalog the `CREATE STREAM` example produces).
+  producing both translations in order with the `Catalog` correctly
+  threaded (`ALTER STREAM` validates against the catalog `CREATE STREAM`
+  produces).
 - A statement containing a literal `;` inside a string literal
   (`CHECK (notes != 'a;b')`) followed by a second real statement,
   confirming the boundary is found correctly (this is the concrete
@@ -354,9 +409,27 @@ files' one-behavior-per-function style:
   statement (`SemanticFailure` naming the right `statement_index`, and
   *not* also reporting cascading errors from any statement after it).
 
+`streams/test/lang/dml_codegen_test.gleam` mirrors the last four bullets
+against `Insert`/`dml_codegen.generate`/`dml_semantics.SemanticError`
+instead, using `schema/ddl_parser` + `schema/ddl_semantics` (already a
+`streams` dependency — see CLAUDE.md) to build a realistic `Catalog` to
+validate the §11.7 `INSERT` example against, the same way
+`dml_semantics_test.gleam` already does.
+
 ## Worked examples (spec.md §9.7 / §10.7 / §11.7)
 
-Given, back to back as one multi-statement input:
+As originally planned, one multi-statement input/output pair to exercise
+`generate_standalone` end to end. As built, this would now be **two**
+separate calls — `schema/ddl_codegen.generate_standalone` on the
+`CREATE STREAM`/`ALTER STREAM` pair, `streams/dml_codegen.generate` on
+the `INSERT` (needing the first call's resulting `Catalog`, or an
+equivalent one built via `schema/ddl_semantics` the way
+`dml_semantics_test.gleam` already does) — see "Issues" below on whether
+a single call spanning both is worth adding back. The combined
+before/after text below is still the right acceptance target for each
+statement's *own* rendering; read it as two runs concatenated, not one:
+
+Given, back to back:
 
 ```
 CREATE STREAM sensor_reading (
@@ -414,28 +487,54 @@ treats its own worked examples as living documentation.)
 
 ## Step-by-step build order
 
-1. `parser.gleam`: extract `parse_one_statement`, add `pub fn
-   parse_many` + tests (multi-statement input, the semicolon-in-a-
-   string-literal case, empty input).
-2. `codegen.gleam`: `data_type_to_sql`, `quote_identifier`,
-   `quote_string_literal` + tests — pure, independently testable, no
-   dependency on the rest of codegen.
-3. `expr_to_sql` + precedence-aware reparenthesization + tests — the
-   most subtle part, same reasoning as why the parent plan built the
-   parser's expression grammar before its statement grammars.
-4. `create_stream_to_sql` / `alter_stream_to_sql` / `insert_to_sql` +
-   tests against the three worked examples above.
-5. `generate` / `generate_standalone` (the `validate_all`/`render_all`
-   driver) + tests, including every `CodegenError` variant.
-6. `gleam test`, then a manual smoke check: feed the three-statement
-   example above through `generate_standalone` and diff the result
-   against the "Worked examples" block by eye.
+1. `ddl_parser.gleam`/`dml_parser.gleam`: extract `parse_one_statement`,
+   add `pub fn parse_many` to each + tests (multi-statement input, the
+   semicolon-in-a-string-literal case, empty input).
+2. `shared/src/lang/expr_codegen.gleam`: `data_type_to_sql`,
+   `quote_identifier`, `quote_string_literal` + tests — pure,
+   independently testable, no dependency on the rest of codegen.
+3. `expr_to_sql` (same module) + precedence-aware reparenthesization +
+   tests — the most subtle part, same reasoning as why the parent plan
+   built the parser's expression grammar before its statement grammars.
+4. `schema/src/lang/ddl_codegen.gleam`'s `create_stream_to_sql` /
+   `alter_stream_to_sql` + tests against the §9.7/§10.7 worked examples
+   above.
+5. `streams/src/lang/dml_codegen.gleam`'s `insert_to_sql` + tests against
+   the §11.7 worked example.
+6. `generate` / `generate_standalone` (the `validate_all`/`render_all`
+   driver) in both `ddl_codegen.gleam` and `dml_codegen.gleam` + tests,
+   including every `CodegenError` variant in each.
+7. `gleam test` in `shared`, `schema`, and `streams`; then a manual smoke
+   check: feed the §9.7/§10.7 pair through `schema/ddl_codegen.
+   generate_standalone` and the §11.7 example through
+   `streams/dml_codegen.generate` (against the first call's `Catalog`),
+   diffing both results against the "Worked examples" block by eye.
 
 ## Issues
 
 Open questions and known gaps this plan doesn't resolve on its own —
 worth a decision before or during implementation:
 
+- **Does one `generate` call still need to accept mixed `CREATE STREAM`/
+  `ALTER STREAM`/`INSERT` input, now that DDL and DML live in separate
+  packages?** As originally planned (single package), `generate` validated
+  and rendered any mix of the three in one pass over one input string —
+  the "Worked examples" section's whole premise. As split, `ddl_codegen.
+  generate` only ever sees `DdlStatement`s and `dml_codegen.generate` only
+  `DmlStatement`s (see "Module layout"), so a single input string mixing
+  `CREATE STREAM` with `INSERT` has no single `generate` to hand it to
+  without one of `schema`/`streams` depending on the other purely for
+  codegen purposes (the same shape of problem `implementation-plan.md`'s
+  "Open questions" already flags for `catalog.gleam`). If mixed input is
+  genuinely needed (e.g. a migration file that both alters a stream and
+  seeds it with data), the natural place for that orchestration is a new
+  layer above both packages — not `lang/` itself — that calls
+  `ddl_codegen.generate` and `dml_codegen.generate` in turn, splitting the
+  input by statement keyword first. If it isn't needed (each service only
+  ever processes its own statement family, per CLAUDE.md's stated service
+  boundaries), this plan's original "one `generate`, any mix" framing
+  should be dropped in favor of the two independent entry points already
+  reflected in "Module layout" above. Not resolved here.
 - **Always-quote identifiers, or quote only when the content requires
   it?** Always-quoting sidesteps needing a PostgreSQL reserved-word list
   (which this codebase doesn't track) entirely, at the cost of noisier
