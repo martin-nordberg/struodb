@@ -111,7 +111,7 @@ fn parse_stream_element(
 /// CONSTRAINT`, and (via its `expr`) nothing else.
 fn parse_named_check(
   tokstrm: TokenStream,
-) -> Result(#(ast.NamedCheck, TokenStream), ParseError) {
+) -> Result(#(xast.NamedCheck, TokenStream), ParseError) {
   let start_span = ts.current(tokstrm).span
   use #(_, tokstrm1) <- result.try(ep.expect_keyword(
     tokstrm,
@@ -139,7 +139,7 @@ fn parse_named_check(
     ")",
   ))
   let span = token.Span(start_span.start, rparen_span.end)
-  Ok(#(ast.NamedCheck(name, expr, span), tokstrm6))
+  Ok(#(xast.NamedCheck(name, expr, span), tokstrm6))
 }
 
 /// Clauses accumulated while scanning a `column_def`'s `column_clause*`
@@ -150,8 +150,8 @@ type ClauseAcc {
   ClauseAcc(
     optional: Bool,
     default: Option(xast.Expr),
-    generated: Option(ast.GeneratedClause),
-    checks: List(ast.NamedCheck),
+    generated: Option(xast.GeneratedClause),
+    checks: List(xast.NamedCheck),
   )
 }
 
@@ -234,7 +234,7 @@ fn parse_column_clauses(
 
 fn parse_generated_clause(
   tokstrm: TokenStream,
-) -> Result(#(ast.GeneratedClause, TokenStream), ParseError) {
+) -> Result(#(xast.GeneratedClause, TokenStream), ParseError) {
   use #(_, tokstrm1) <- result.try(ep.expect_keyword(
     tokstrm,
     token.KwGenerated,
@@ -259,9 +259,9 @@ fn parse_generated_clause(
   ))
   case ts.current(tokstrm6).kind {
     token.Keyword(token.KwStored) ->
-      Ok(#(ast.GeneratedClause(expr, ast.Stored), ts.advance(tokstrm6)))
+      Ok(#(xast.GeneratedClause(expr, xast.Stored), ts.advance(tokstrm6)))
     token.Keyword(token.KwVirtual) ->
-      Ok(#(ast.GeneratedClause(expr, ast.Virtual), ts.advance(tokstrm6)))
+      Ok(#(xast.GeneratedClause(expr, xast.Virtual), ts.advance(tokstrm6)))
     _ -> Error(MissingGeneratedStorage(span: ts.current(tokstrm6).span))
   }
 }

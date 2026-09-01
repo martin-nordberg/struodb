@@ -74,12 +74,12 @@ fn base_stream_create() -> ast.DdlStatement {
       data_type: xast.DtInt,
       optional: False,
       default: None,
-      generated: Some(ast.GeneratedClause(xast.IntLiteral("1"), ast.Stored)),
+      generated: Some(xast.GeneratedClause(xast.IntLiteral("1"), xast.Stored)),
       checks: [],
       span: dummy_span(),
     )),
     ast.TableConstraint(
-      check: ast.NamedCheck(
+      check: xast.NamedCheck(
         "a_positive",
         xast.BinaryOp(xast.CmpGt, col_ref("a"), xast.IntLiteral("0")),
         dummy_span(),
@@ -163,7 +163,7 @@ pub fn default_references_column_test() {
 }
 
 pub fn unknown_column_reference_test() {
-  let check = ast.NamedCheck("c1", col_ref("nonexistent"), dummy_span())
+  let check = xast.NamedCheck("c1", col_ref("nonexistent"), dummy_span())
   let stmt =
     create_stream("s", [
       ast.Column(column("id", xast.DtHlc)),
@@ -187,8 +187,8 @@ pub fn duplicate_column_name_test() {
 }
 
 pub fn duplicate_constraint_name_test() {
-  let check1 = ast.NamedCheck("c1", xast.BoolLiteral(True), dummy_span())
-  let check2 = ast.NamedCheck("c1", xast.BoolLiteral(True), dummy_span())
+  let check1 = xast.NamedCheck("c1", xast.BoolLiteral(True), dummy_span())
+  let check2 = xast.NamedCheck("c1", xast.BoolLiteral(True), dummy_span())
   let stmt =
     create_stream("s", [
       ast.Column(column("id", xast.DtHlc)),
@@ -216,7 +216,7 @@ pub fn a_statement_with_two_independent_violations_reports_both_test() {
     create_stream("bad", [
       ast.Column(column("a", xast.DtInt)),
       ast.TableConstraint(
-        check: ast.NamedCheck("c", col_ref("nope"), dummy_span()),
+        check: xast.NamedCheck("c", col_ref("nope"), dummy_span()),
         span: dummy_span(),
       ),
     ])
@@ -239,7 +239,7 @@ pub fn unknown_column_reference_span_is_the_column_refs_own_span_test() {
       token.Position(line: 5, column: 20, byte_offset: 110),
     )
   let check =
-    ast.NamedCheck(
+    xast.NamedCheck(
       "c",
       xast.BinaryOp(
         xast.LogicalAnd,

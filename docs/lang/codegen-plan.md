@@ -524,8 +524,12 @@ worth a decision before or during implementation:
   `DmlStatement`s (see "Module layout"), so a single input string mixing
   `CREATE STREAM` with `INSERT` has no single `generate` to hand it to
   without one of `schema`/`streams` depending on the other purely for
-  codegen purposes (the same shape of problem `implementation-plan.md`'s
-  "Open questions" already flags for `catalog.gleam`). If mixed input is
+  codegen purposes — the same shape of problem `implementation-plan.md`'s
+  "Open questions" once flagged for `catalog.gleam` before a review
+  decoupled it from `ddl_ast` and moved it to `shared/`; no equivalent
+  decoupling is obvious here, since rendering `CREATE STREAM`/`ALTER
+  STREAM`/`INSERT` genuinely is schema-/streams-specific, unlike a
+  `Catalog`'s shape. If mixed input is
   genuinely needed (e.g. a migration file that both alters a stream and
   seeds it with data), the natural place for that orchestration is a new
   layer above both packages — not `lang/` itself — that calls

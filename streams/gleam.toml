@@ -19,12 +19,13 @@ birch = ">= 0.2.1 and < 1.0.0"
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 gleam_time = ">= 1.10.0 and < 2.0.0"
 shared = { path = "../shared" }
-# INSERT validation (lang/dml_semantics) reads and writes a `Catalog` to
-# check a stream's declared shape — `catalog.gleam` lives in schema/,
-# next to the ddl_ast types it operates on, so streams depends on the
-# whole schema package to reach it. See the note on `Catalog` in
-# schema/src/lang/catalog.gleam.
-schema = { path = "../schema" }
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
+# Test-only: dml_semantics_test.gleam's worked-example test builds a
+# realistic Catalog by running schema's own ddl_parser/ddl_semantics
+# against spec.md's CREATE/ALTER STREAM examples, rather than hand-
+# building one — production code (lang/dml_semantics.gleam) needs only
+# lang/catalog, which lives in shared/, so this isn't a production
+# dependency. See the note on `Catalog` in shared/src/lang/catalog.gleam.
+schema = { path = "../schema" }

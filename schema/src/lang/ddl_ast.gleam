@@ -4,9 +4,11 @@ import lang/token.{type Span}
 
 //-----------------------------------------------------------------------------
 // Pure data: the parsed shape of StruoDB source text (spec.md Part II).
-// No logic here — see expr_parser.gleam for what builds these, catalog.gleam
-// for what a validated `Statement` does to a stream's declared shape, and
-// semantic.gleam for the checks a `Statement` must pass first.
+// No logic here — see expr_parser.gleam/ddl_parser.gleam for what builds
+// these, catalog.gleam (shared/) for what a validated `DdlStatement` does
+// to a stream's declared shape, and ddl_semantics.gleam for the checks a
+// `DdlStatement` must pass first. `GeneratedClause`/`NamedCheck` live in
+// expr_ast.gleam (shared/), not here — see the note there.
 //-----------------------------------------------------------------------------
 
 pub type DdlStatement {
@@ -29,31 +31,15 @@ pub type ColumnDef {
     data_type: xast.DataType,
     optional: Bool,
     default: Option(xast.Expr),
-    generated: Option(GeneratedClause),
-    checks: List(NamedCheck),
+    generated: Option(xast.GeneratedClause),
+    checks: List(xast.NamedCheck),
     span: Span,
   )
 }
 
 pub type StreamElement {
   Column(ColumnDef)
-  TableConstraint(check: NamedCheck, span: Span)
-}
-
-pub type GeneratedClause {
-  GeneratedClause(expr: xast.Expr, storage: GeneratedStorage)
-}
-
-pub type GeneratedStorage {
-  Stored
-  Virtual
-}
-
-/// `CONSTRAINT constraint_name CHECK (expr)` (§9.1), whether attached to
-/// a column (`ColumnDef.checks`) or standalone (`StreamElement.
-/// TableConstraint`) — the same shape either way, per §9.5.
-pub type NamedCheck {
-  NamedCheck(constraint_name: String, expr: xast.Expr, span: Span)
+  TableConstraint(check: xast.NamedCheck, span: Span)
 }
 
 //-----------------------------------------------------------------------------
@@ -64,7 +50,7 @@ pub type AlterAction {
   AddColumn(ColumnDef, span: Span)
   DropColumn(column_name: String, span: Span)
   AlterColumnType(column_name: String, data_type: xast.DataType, span: Span)
-  AddConstraint(NamedCheck)
+  AddConstraint(xast.NamedCheck)
   DropConstraint(constraint_name: String, span: Span)
 }
 //-----------------------------------------------------------------------------

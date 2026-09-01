@@ -90,12 +90,12 @@ fn base_stream_create() -> dast.DdlStatement {
       data_type: xast.DtInt,
       optional: False,
       default: None,
-      generated: Some(dast.GeneratedClause(xast.IntLiteral("1"), dast.Stored)),
+      generated: Some(xast.GeneratedClause(xast.IntLiteral("1"), xast.Stored)),
       checks: [],
       span: dummy_span(),
     )),
     dast.TableConstraint(
-      check: dast.NamedCheck(
+      check: xast.NamedCheck(
         "a_positive",
         xast.BinaryOp(xast.CmpGt, col_ref("a"), xast.IntLiteral("0")),
         dummy_span(),

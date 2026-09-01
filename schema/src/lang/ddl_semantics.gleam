@@ -77,8 +77,83 @@ pub fn analyze(
       check_alter_stream(cat, name, actions, span)
   }
   case errors {
-    [] -> Ok(catalog.apply_statement(cat, stmt))
+    [] -> Ok(apply_statement(cat, stmt))
     _ -> Error(errors)
+  }
+}
+
+//-----------------------------------------------------------------------------
+// Applying an already-validated statement to the catalog. `catalog.gleam`
+// (shared/) only exposes small primitives (`create_stream`, `add_column`,
+// ...) rather than one `apply_statement(catalog, DdlStatement)` — see the
+// note on `Catalog` there — so this is where a `DdlStatement`'s pieces
+// get translated into those calls, reusing the same `column_defs`/
+// `table_constraints`/`hlc_columns` helpers `check_create_stream` above
+// already builds for validation. Only ever called once every check above
+// has passed, via `analyze`.
+//-----------------------------------------------------------------------------
+
+fn apply_statement(cat: Catalog, stmt: ast.DdlStatement) -> Catalog {
+  case stmt {
+    ast.CreateStream(name:, elements:, span: _) ->
+      apply_create_stream(cat, name, elements)
+    ast.AlterStream(name:, actions:, span: _) ->
+      list.fold(actions, cat, fn(acc, action) {
+        apply_alter_action(acc, name, action)
+      })
+  }
+}
+
+fn apply_create_stream(
+  cat: Catalog,
+  name: String,
+  elements: List(ast.StreamElement),
+) -> Catalog {
+  let cols = column_defs(elements)
+  let checks =
+    list.append(
+      list.flat_map(cols, fn(c) { c.checks }),
+      table_constraints(elements),
+    )
+  // `check_create_stream`'s own `hlc_count_errors` already confirmed
+  // exactly one column is typed `HLC` — `analyze` never calls this
+  // otherwise.
+  let assert [hlc, ..] = hlc_columns(cols)
+    as "apply_create_stream: no HLC column found on an already-validated CreateStream"
+  catalog.create_stream(
+    cat,
+    name,
+    list.map(cols, to_column_schema),
+    hlc.name,
+    checks,
+  )
+}
+
+fn to_column_schema(col: ast.ColumnDef) -> catalog.ColumnSchema {
+  catalog.ColumnSchema(
+    name: col.name,
+    data_type: col.data_type,
+    optional: col.optional,
+    default: col.default,
+    generated: col.generated,
+  )
+}
+
+fn apply_alter_action(
+  cat: Catalog,
+  stream: String,
+  action: ast.AlterAction,
+) -> Catalog {
+  case action {
+    ast.AddColumn(col, _) ->
+      catalog.add_column(cat, stream, to_column_schema(col))
+    ast.DropColumn(column_name:, span: _) ->
+      catalog.drop_column(cat, stream, column_name)
+    ast.AlterColumnType(column_name:, data_type:, span: _) ->
+      catalog.alter_column_type(cat, stream, column_name, data_type)
+    ast.AddConstraint(check) -> catalog.add_constraint(cat, stream, check)
+    ast.DropConstraint(constraint_name:, span: _) ->
+      catalog.drop_constraint(cat, stream, constraint_name)
   }
 }
 
@@ -146,7 +221,7 @@ fn column_defs(elements: List(ast.StreamElement)) -> List(ast.ColumnDef) {
 
 fn table_constraints(
   elements: List(ast.StreamElement),
-) -> List(ast.NamedCheck) {
+) -> List(xast.NamedCheck) {
   list.filter_map(elements, fn(element) {
     case element {
       ast.TableConstraint(check:, span: _) -> Ok(check)
@@ -540,7 +615,7 @@ fn decimal_change(
 fn check_add_constraint(
   schema: catalog.StreamSchema,
   dropped_constraint_names: List(String),
-  check: ast.NamedCheck,
+  check: xast.NamedCheck,
 ) -> List(SemanticError) {
   let effective_existing_names =
     list.filter(dict.keys(schema.constraints), fn(name) {

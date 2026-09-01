@@ -116,4 +116,34 @@ pub type BinaryOperator {
   LogicalAnd
   LogicalOr
 }
+
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// Expression-attached metadata (spec.md §9.1, §9.5) — not `Expr` itself,
+// but small wrappers around one that both `schema/ddl_ast.gleam` (as
+// parsed) and `catalog.gleam` (as stored, once a `CREATE`/`ALTER STREAM`
+// validates) need the same shape for. Living here rather than in
+// `ddl_ast.gleam` is what lets `catalog.gleam` — which `dml_semantics.
+// gleam` (streams) also needs, to validate `INSERT` against a stream's
+// current shape — stay in `shared/` instead of depending on schema-only
+// DDL syntax types; see the note on `Catalog` in catalog.gleam.
+//-----------------------------------------------------------------------------
+
+pub type GeneratedClause {
+  GeneratedClause(expr: Expr, storage: GeneratedStorage)
+}
+
+pub type GeneratedStorage {
+  Stored
+  Virtual
+}
+
+/// `CONSTRAINT constraint_name CHECK (expr)` (§9.1), whether attached to
+/// a column, standalone at table level, or (once a `CREATE`/`ALTER
+/// STREAM` validates) recorded in a `Catalog`'s `StreamSchema` — the same
+/// shape throughout, per §9.5.
+pub type NamedCheck {
+  NamedCheck(constraint_name: String, expr: Expr, span: Span)
+}
 //-----------------------------------------------------------------------------

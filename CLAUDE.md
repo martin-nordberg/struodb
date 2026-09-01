@@ -19,10 +19,11 @@ its own `gleam.toml`, `manifest.toml`, and CI workflow:
   is still the stub print below, not yet wired to any of it.
 - **`streams/`** — application intended to handle stream manipulation
   commands. Its `lang/` now has real `INSERT` parsing and semantic
-  analysis, which is why `streams` also depends on `schema` (not just
-  `shared` — see below); `streams/src/streams.gleam`'s current `main` is
-  unrelated actor-pipeline demo code, not stream-manipulation logic wired
-  to any of it yet.
+  analysis; `streams/src/streams.gleam`'s current `main` is unrelated
+  actor-pipeline demo code, not stream-manipulation logic wired to any of
+  it yet. Production code depends only on `shared`; `schema` is a
+  dev-only dependency, used solely by one test that builds a `Catalog` via
+  real DDL parsing — see "The StruoDB query language front end" below.
 - **`projections/`** — application intended to handle projection
   behaviors.
 - **`network/`** — application intended to maintain network configuration
@@ -112,12 +113,13 @@ statement-family-specific — not kept in one module:
 
 ```
 shared/src/lang/     token.gleam / lexer.gleam       — lexical layer
-  (used by both       expr_ast.gleam / expr_parser.gleam — expr, data_type
-   schema & streams)  token_stream.gleam              — token cursor
+  (used by both       expr_ast.gleam / expr_parser.gleam — expr, data_type,
+   schema & streams)                                    GeneratedClause, NamedCheck
+                       token_stream.gleam              — token cursor
+                       catalog.gleam — a stream's declared shape
 
 schema/src/lang/     ddl_ast.gleam / ddl_parser.gleam    — CREATE/ALTER STREAM
   (DDL)               ddl_semantics.gleam
-                       catalog.gleam — a stream's declared shape
 
 streams/src/lang/    dml_ast.gleam / dml_parser.gleam    — INSERT
   (DML)               dml_semantics.gleam
@@ -126,24 +128,42 @@ streams/src/lang/    dml_ast.gleam / dml_parser.gleam    — INSERT
 A DDL statement's pipeline: `source text → shared/lexer.tokenize →
 schema/ddl_parser.parse (which calls into shared/expr_parser for
 expressions/data types) → schema/ddl_ast.DdlStatement →
-schema/ddl_semantics.analyze (validates against a Catalog) →
-schema/catalog.apply_statement (records the resulting shape)`. `INSERT`
-follows the same shape one package over, through `streams/dml_parser` →
-`streams/dml_ast.DmlStatement` → `streams/dml_semantics.analyze` — which
-validates against a `Catalog` but never changes one, since an `INSERT`
-never alters a stream's shape.
+schema/ddl_semantics.analyze`, which validates the statement against a
+`Catalog` and, once it's `Ok`, translates it into calls against
+`shared/catalog`'s own `create_stream`/`add_column`/etc. primitives to
+record the resulting shape. `INSERT` follows the same shape one package
+over, through `streams/dml_parser` → `streams/dml_ast.DmlStatement` →
+`streams/dml_semantics.analyze` — which validates against a `Catalog` but
+never changes one, since an `INSERT` never alters a stream's shape.
 
 - `token.gleam` / `lexer.gleam` (shared) — lexical layer: keywords are
   case-insensitive, unquoted identifiers fold to lower case, quoted
   identifiers (`"..."`) are case-sensitive, matching PostgreSQL convention.
-- `expr_ast.gleam` / `expr_parser.gleam` (shared) — expressions and
-  `data_type` (spec.md §8–§9.1): pure data plus the precedence-layered
-  recursive-descent parser for them, reused as-is by both `ddl_parser`
-  and `dml_parser` (each also uses `expr_parser`'s `expect_*` cursor
-  helpers and `ParseError` type for its own statement-level grammar).
+- `expr_ast.gleam` / `expr_parser.gleam` (shared) — expressions,
+  `data_type` (spec.md §8–§9.1), and `GeneratedClause`/`NamedCheck` (§9.1,
+  §9.5 — small wrappers around an `Expr` that both `ddl_ast.gleam`, as
+  parsed, and `catalog.gleam`, as stored, need the same shape for): pure
+  data plus the precedence-layered recursive-descent parser for the
+  expressions/data types, reused as-is by both `ddl_parser` and
+  `dml_parser` (each also uses `expr_parser`'s `expect_*` cursor helpers
+  and `ParseError` type for its own statement-level grammar).
   `token_stream.gleam` is the token-list cursor (peek/advance) every
   parser production in `expr_parser`/`ddl_parser`/`dml_parser` is built
   from.
+- `catalog.gleam` (shared) — tracks the accumulated, validated shape of a
+  stream as `CREATE STREAM`/`ALTER STREAM` statements are applied to it,
+  via small primitives (`create_stream`, `add_column`, `drop_column`,
+  `alter_column_type`, `add_constraint`, `drop_constraint`) rather than
+  one `apply_statement(catalog, stmt)` — it knows nothing about
+  `ddl_ast.gleam`'s `DdlStatement`/`StreamElement`/`AlterAction` (only
+  `ColumnSchema`/`NamedCheck`, both shared types), which is what lets it
+  live here rather than next to `ddl_ast.gleam` in `schema/`.
+  `ddl_semantics.gleam` (schema) translates a validated `DdlStatement`
+  into these calls itself, one variant at a time. This is why
+  `dml_semantics.gleam` (streams) can reach a `Catalog` — to validate
+  `INSERT` against a stream's current shape — by depending on `shared`
+  alone, with no `schema` dependency in `streams`' production code at
+  all (see "What this is" above).
 - `ddl_ast.gleam` / `ddl_parser.gleam` (schema) — `CreateStream`/
   `AlterStream` shape (spec.md §9–§10) and the parser that builds it. Read
   `ddl_ast.gleam`'s header comment — it explains why some shapes (e.g.
@@ -158,13 +178,6 @@ never alters a stream's shape.
   column-reference-collecting helpers (`collect_column_refs`/
   `check_expr_column_refs`) verbatim rather than sharing them — a known
   simplification opportunity, not yet acted on.
-- `catalog.gleam` (schema) — tracks the accumulated, validated shape of a
-  stream as `CREATE STREAM`/`ALTER STREAM` statements are applied to it.
-  Lives in `schema/`, next to the `ddl_ast` types `apply_statement`
-  operates on, rather than `shared/` — which is why `streams/gleam.toml`
-  depends on the whole `schema` package (not just `shared`) just to reach
-  it: `dml_semantics` needs the same `Catalog` to validate `INSERT`
-  against a stream's current shape.
 
 Only `CREATE STREAM`, `ALTER STREAM`, and `INSERT` are in scope so far;
 querying/subscribing to a stream's events is explicitly out of scope per

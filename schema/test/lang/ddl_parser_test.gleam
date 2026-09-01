@@ -277,12 +277,12 @@ pub fn create_stream_example_round_trips_test() {
         data_type: xast.DtTimestamptz,
         optional: False,
         default: None,
-        generated: Some(ast.GeneratedClause(
+        generated: Some(xast.GeneratedClause(
           xast.FunctionCall(
             "timestamptz_from_hlc",
             [xast.ColumnRef("reading_hlc", _)],
           ),
-          ast.Stored,
+          xast.Stored,
         )),
         checks: [],
         span: _,
@@ -294,7 +294,7 @@ pub fn create_stream_example_round_trips_test() {
         default: None,
         generated: None,
         checks: [
-          ast.NamedCheck(
+          xast.NamedCheck(
             "reading_in_range",
             xast.BinaryOp(
               xast.LogicalAnd,
@@ -380,7 +380,7 @@ pub fn alter_stream_example_round_trips_test() {
     ast.AddColumn(ast.ColumnDef(name: "calibration_id", optional: True, ..), ..),
     ast.AlterColumnType("units", xast.DtVarchar(Some(64)), _),
     ast.DropConstraint("reading_in_range", _),
-    ast.AddConstraint(ast.NamedCheck("reading_in_range", _, _)),
+    ast.AddConstraint(xast.NamedCheck("reading_in_range", _, _)),
   ] = actions
 }
 //-----------------------------------------------------------------------------
