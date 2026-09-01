@@ -7,7 +7,11 @@ counter so that clock values across nodes are both causally ordered (like a
 Lamport clock) and stay close to real time (unlike a pure Lamport clock).
 Each value is encoded as a single 15-character string that is directly
 comparable and sortable without decoding — 15 was chosen specifically so
-the value fits a PostgreSQL `char(15)` column with no padding.
+the value fits a PostgreSQL `char(15)` column with no padding. StruoDB's
+query language stores that encoded value, plus its 3 fields decoded back
+out into their own columns, as 4 automatic columns on every stream —
+`_struo_hlc`/`_struo_hlc_timestamp`/`_struo_hlc_count`/
+`_struo_hlc_node_id` — see `docs/lang/spec.md` §9.2.
 
 ## Encoding
 
@@ -118,6 +122,12 @@ reused for node ID validation and for `merge()`'s input validation.
 - Validated once, at clock startup, using the same length/alphabet check
   used to validate `merge()` input. An invalid node ID is reported as an
   error at startup rather than silently accepted or truncated.
+- "Opaque" here means this spec assigns no meaning to a node ID beyond
+  identity/uniqueness — it doesn't mean non-numeric. StruoDB's query
+  language decodes it to its base-62 integer value for storage in
+  `_struo_hlc_node_id INTEGER` (`docs/lang/spec.md` §9.2); decoding a
+  base-62 string to an integer is well-defined and reversible regardless
+  of what the digits are taken to mean.
 
 ## Non-goals / accepted limitations
 

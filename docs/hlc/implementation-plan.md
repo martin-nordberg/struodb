@@ -162,17 +162,33 @@ caller who only cares that decoding failed can match `InvalidFormat(_)`.
 
 ```gleam
 /// Messages sent to a clock actor. Opaque: the type itself is public (so
-/// it can appear in `start`/`next`/`merge`/`stop`'s signatures), but its
-/// constructors are not — all interaction happens through those four
-/// functions, so callers never need to build or match on a message
-/// directly.
+/// it can appear in `start`/`next`/`next_parts`/`merge`/`stop`'s
+/// signatures), but its constructors are not — all interaction happens
+/// through those functions, so callers never need to build or match on a
+/// message directly.
 pub opaque type ClockMessage {
   /// Requests the next HLC value for a local event.
   Next(reply_to: Subject(String))
+  /// Requests the next HLC value for a local event, decomposed into its
+  /// three encoded fields — see `HlcParts`.
+  NextParts(reply_to: Subject(HlcParts))
   /// Merges in an HLC value received from another node.
   Merge(remote: String, reply_to: Subject(Result(String, HlcError)))
   /// Sent to end the process.
   StopClock
+}
+
+/// One `next()`/`next_parts()` draw, already decomposed into its three
+/// encoded fields — for a caller that needs the physical time/counter/
+/// node id individually rather than re-parsing `encoded` itself (e.g.
+/// StruoDB's own DML codegen, populating the 3 derived SQL columns
+/// alongside the encoded value itself — see docs/lang/spec.md §9.2).
+/// `node_id` is decoded to its integer value even though the field is
+/// otherwise opaque/caller-assigned (see "Node ID" in spec.md) — decoding
+/// it is a well-defined, reversible operation regardless of what the
+/// digits are taken to mean.
+pub type HlcParts {
+  HlcParts(encoded: String, physical_time_ms: Int, counter: Int, node_id: Int)
 }
 ```
 
@@ -180,10 +196,13 @@ pub opaque type ClockMessage {
 combination that works here: a plain private `type` can't appear in a
 `pub fn`'s signature at all (Gleam rejects "private type used in public
 interface"), but the *type name* `ClockMessage` has to be nameable in
-`Subject(ClockMessage)` for `start`/`next`/`merge`/`stop`'s signatures.
-`opaque` gets both: the name is public, the constructors (`Next`, `Merge`,
-`StopClock`) are not — so nothing outside this module can send anything
-but what `next`/`merge`/`stop` send on its behalf.
+`Subject(ClockMessage)` for `start`/`next`/`next_parts`/`merge`/`stop`'s
+signatures. `opaque` gets both: the name is public, the constructors
+(`Next`, `NextParts`, `Merge`, `StopClock`) are not — so nothing outside
+this module can send anything but what `next`/`next_parts`/`merge`/
+`stop` send on its behalf. `HlcParts` is a plain (non-opaque) `pub type`,
+unlike `ClockMessage` — callers are meant to read its fields directly,
+there's nothing to hide.
 
 ### Public API
 
@@ -200,6 +219,13 @@ pub fn start(
 
 /// Returns the next HLC value for a local event on this node.
 pub fn next(clock: Subject(ClockMessage)) -> String
+
+/// Returns the next HLC value for a local event on this node, the same
+/// as `next`, but already decomposed into its three encoded fields — see
+/// `HlcParts`. Avoids a redundant encode-then-decode round trip: the
+/// actor already has `physical_time_ms`/`counter`/`node_id` in hand
+/// right before encoding them for `next`.
+pub fn next_parts(clock: Subject(ClockMessage)) -> HlcParts
 
 /// Merges in an HLC value received from another node, advancing this
 /// node's clock if needed. Returns an error (leaving this node's clock
@@ -224,6 +250,10 @@ const call_timeout_ms = 1000
 
 pub fn next(clock: Subject(ClockMessage)) -> String {
   actor.call(clock, waiting: call_timeout_ms, sending: Next)
+}
+
+pub fn next_parts(clock: Subject(ClockMessage)) -> HlcParts {
+  actor.call(clock, waiting: call_timeout_ms, sending: NextParts)
 }
 
 pub fn merge(clock: Subject(ClockMessage), remote: String) -> Result(String, HlcError) {
