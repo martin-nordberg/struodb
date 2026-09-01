@@ -1,8 +1,9 @@
 import gleam/dict.{type Dict}
 import gleam/list
-import gleam/option.{type Option}
+import gleam/option.{type Option, None, Some}
 import lang/expr_ast.{
-  type DataType, type Expr, type GeneratedClause, type NamedCheck,
+  type DataType, type Expr, type GeneratedClause, type NamedCheck, DtChar,
+  DtInteger, DtTimestamptz,
 }
 
 //-----------------------------------------------------------------------------
@@ -37,8 +38,6 @@ pub type StreamSchema {
   StreamSchema(
     name: String,
     columns: Dict(String, ColumnSchema),
-    /// Name of the (exactly one) `HLC` column — see spec.md §9.2.
-    hlc_column: String,
     constraints: Dict(String, NamedCheck),
   )
 }
@@ -50,6 +49,15 @@ pub type ColumnSchema {
     optional: Bool,
     default: Option(Expr),
     generated: Option(GeneratedClause),
+    /// `True` for exactly the 4 fixed `_STRUO_`-prefixed columns
+    /// `system_columns()` below adds to every stream — never settable by
+    /// anything derived from a parsed `ddl_ast`. Lets `dml_semantics`
+    /// (streams/) exclude these from an `INSERT`'s column list the same
+    /// way it already excludes `GENERATED` columns, and `ddl_semantics`
+    /// (schema/) refuse `DROP COLUMN`/`ALTER COLUMN TYPE` against them,
+    /// without either package needing its own notion of "which columns
+    /// are these."
+    system: Bool,
   )
 }
 
@@ -58,28 +66,103 @@ pub fn empty() -> Catalog {
 }
 
 //-----------------------------------------------------------------------------
+// The 4 automatic system columns every stream gets, regardless of what
+// `CREATE STREAM` itself declares — see "The StruoDB query language
+// front end" in CLAUDE.md and docs/lang/spec.md §9.2. Defined once, here,
+// since `ddl_codegen.gleam` (schema/) needs these same names/types to
+// render the `CREATE TABLE` column lines, and `dml_codegen.gleam`
+// (streams/) needs them to render an `INSERT`'s extra column list —
+// keeping a single source of truth for "what are they called, in what
+// order" is what lets both packages stay in lockstep without one
+// depending on the other.
+//-----------------------------------------------------------------------------
+
+/// The whole encoded HLC value (see docs/hlc/spec.md) — a fixed 15
+/// characters, and the table's `PRIMARY KEY`. Lower case, like any other
+/// unquoted identifier (spec.md §2) — an uppercase name would only ever
+/// force `expr_codegen.quote_identifier` to render it quoted, visually
+/// distinct from every ordinary user column for no functional reason,
+/// and would force a client to quote it too when referencing it (e.g. in
+/// `RETURNING`) to avoid its own unquoted spelling folding away from the
+/// catalog's exact-case key.
+pub const hlc_column_name = "_struo_hlc"
+
+/// The HLC's embedded physical-time field, as a real `TIMESTAMPTZ`.
+pub const hlc_timestamp_column_name = "_struo_hlc_timestamp"
+
+/// The HLC's embedded logical counter.
+pub const hlc_count_column_name = "_struo_hlc_count"
+
+/// The HLC's embedded node id, decoded from base-62 to its integer value.
+pub const hlc_node_id_column_name = "_struo_hlc_node_id"
+
+/// The 4 system columns, in the fixed order they're always rendered:
+/// leading every `CREATE TABLE`'s column list and every generated
+/// `INSERT`'s column list alike.
+pub fn system_columns() -> List(ColumnSchema) {
+  [
+    ColumnSchema(
+      name: hlc_column_name,
+      data_type: DtChar(Some(15)),
+      optional: False,
+      default: None,
+      generated: None,
+      system: True,
+    ),
+    ColumnSchema(
+      name: hlc_timestamp_column_name,
+      data_type: DtTimestamptz,
+      optional: False,
+      default: None,
+      generated: None,
+      system: True,
+    ),
+    ColumnSchema(
+      name: hlc_count_column_name,
+      data_type: DtInteger,
+      optional: False,
+      default: None,
+      generated: None,
+      system: True,
+    ),
+    ColumnSchema(
+      name: hlc_node_id_column_name,
+      data_type: DtInteger,
+      optional: False,
+      default: None,
+      generated: None,
+      system: True,
+    ),
+  ]
+}
+
+//-----------------------------------------------------------------------------
 // CREATE STREAM
 //-----------------------------------------------------------------------------
 
-/// Declares a new stream named `name`. Callers (`ddl_semantics.gleam`) are
-/// expected to have already validated the `CreateStream` producing these
-/// arguments and to call this only once that has come back `Ok` — this
-/// function does not re-check any of it: in particular, that `hlc_column`
-/// actually names one of `columns`, and that `columns`/`constraints`
-/// carry no duplicate names (a later entry for the same name silently
-/// wins, same as `dict.insert` always does).
+/// Declares a new stream named `name`, with `columns` (a caller-supplied,
+/// user-declared list) automatically joined by the 4 fixed
+/// `system_columns()` above. Callers (`ddl_semantics.gleam`) are expected
+/// to have already validated the `CreateStream` producing these arguments
+/// and to call this only once that has come back `Ok` — this function
+/// does not re-check any of it: in particular, that `columns`/
+/// `constraints` carry no duplicate names (a later entry for the same
+/// name silently wins, same as `dict.insert` always does) and that none
+/// of `columns` collides with a system column name (`ddl_semantics.gleam`
+/// rejects any user-declared name starting with `_STRUO_` before this is
+/// ever called).
 pub fn create_stream(
   catalog: Catalog,
   name: String,
   columns: List(ColumnSchema),
-  hlc_column: String,
   constraints: List(NamedCheck),
 ) -> Catalog {
   let schema =
     StreamSchema(
       name: name,
-      columns: index_by(columns, fn(col) { col.name }),
-      hlc_column: hlc_column,
+      columns: index_by(list.append(system_columns(), columns), fn(col) {
+        col.name
+      }),
       constraints: index_by(constraints, fn(check) { check.constraint_name }),
     )
   Catalog(streams: dict.insert(catalog.streams, name, schema))

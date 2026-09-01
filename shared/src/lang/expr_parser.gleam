@@ -693,7 +693,6 @@ pub fn parse_data_type(
       ))
       Ok(#(expr_ast.DtDouble, tokstrm1))
     }
-    token.Keyword(token.KwHlc) -> Ok(#(expr_ast.DtHlc, ts.advance(tokstrm)))
     token.Keyword(token.KwInt) -> Ok(#(expr_ast.DtInt, ts.advance(tokstrm)))
     token.Keyword(token.KwInteger) ->
       Ok(#(expr_ast.DtInteger, ts.advance(tokstrm)))

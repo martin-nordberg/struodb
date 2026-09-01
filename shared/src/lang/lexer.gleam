@@ -330,7 +330,6 @@ fn lookup_keyword(text: String) -> Option(Keyword) {
     "date" -> Some(token.KwDate)
     "decimal" -> Some(token.KwDecimal)
     "double" -> Some(token.KwDouble)
-    "hlc" -> Some(token.KwHlc)
     "int" -> Some(token.KwInt)
     "integer" -> Some(token.KwInteger)
     "interval" -> Some(token.KwInterval)

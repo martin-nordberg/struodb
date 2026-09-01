@@ -46,6 +46,29 @@ pub fn consecutive_next_calls_strictly_increase_test() {
   clock.stop(subject)
 }
 
+pub fn next_parts_matches_next_parts_decoded_from_its_own_encoded_value_test() {
+  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+
+  let parts = clock.next_parts(subject)
+  let #(time_ms, counter) = decode_for_test(parts.encoded)
+  let assert Ok(decoded_node_id) = base62.decode(node_id)
+
+  assert parts.physical_time_ms == time_ms
+  assert parts.counter == counter
+  assert parts.node_id == decoded_node_id
+  clock.stop(subject)
+}
+
+pub fn next_parts_advances_the_same_state_next_does_test() {
+  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+
+  let first = clock.next(subject)
+  let second = clock.next_parts(subject)
+
+  assert string.compare(first, second.encoded) == order.Lt
+  clock.stop(subject)
+}
+
 pub fn rollover_advances_time_and_resets_counter_test() {
   let assert Ok(subject) = clock.start(node_id, fixed_clock())
 

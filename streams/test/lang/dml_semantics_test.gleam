@@ -77,12 +77,13 @@ fn parse_dml_source(source: String) -> ast.DmlStatement {
   stmt
 }
 
-/// `s`: `id HLC`, `a INT`, `name VARCHAR(64)` (both `a` and `name`
-/// `NOT NULL`, no default), `computed INT GENERATED ALWAYS AS (1)
-/// STORED`, and a table-level `CONSTRAINT a_positive CHECK (a > 0)`.
+/// `s`: `a INT`, `name VARCHAR(64)` (both `NOT NULL`, no default),
+/// `computed INT GENERATED ALWAYS AS (1) STORED`, and a table-level
+/// `CONSTRAINT a_positive CHECK (a > 0)` — plus the 4 automatic system
+/// columns every stream gets (`catalog.create_stream`), not declared
+/// here at all.
 fn base_stream_create() -> dast.DdlStatement {
   create_stream("s", [
-    dast.Column(column("id", xast.DtHlc)),
     dast.Column(column("a", xast.DtInt)),
     dast.Column(column("name", xast.DtVarchar(Some(64)))),
     dast.Column(dast.ColumnDef(
@@ -126,9 +127,8 @@ pub fn insert_column_list_empty_test() {
 
 pub fn insert_unknown_column_test() {
   let stmt =
-    insert("s", ["id", "a", "name", "zzz"], [
+    insert("s", ["a", "name", "zzz"], [
       [
-        ast.ValueExpr(xast.StringLiteral("x")),
         ast.ValueExpr(xast.IntLiteral("1")),
         ast.ValueExpr(xast.StringLiteral("y")),
         ast.ValueExpr(xast.IntLiteral("1")),
@@ -143,9 +143,8 @@ pub fn insert_unknown_column_test() {
 
 pub fn insert_generated_column_in_list_test() {
   let stmt =
-    insert("s", ["id", "a", "name", "computed"], [
+    insert("s", ["a", "name", "computed"], [
       [
-        ast.ValueExpr(xast.StringLiteral("x")),
         ast.ValueExpr(xast.IntLiteral("1")),
         ast.ValueExpr(xast.StringLiteral("y")),
         ast.ValueExpr(xast.IntLiteral("2")),
@@ -161,20 +160,27 @@ pub fn insert_generated_column_in_list_test() {
   )
 }
 
-pub fn insert_missing_hlc_column_even_when_everything_else_resolves_fine_test() {
-  let stmt_create =
-    create_stream("s6", [
-      dast.Column(column("id", xast.DtHlc)),
-      dast.Column(dast.ColumnDef(..column("note", xast.DtText), optional: True)),
+pub fn insert_system_column_in_list_test() {
+  let stmt =
+    insert("s", [catalog.hlc_column_name, "a", "name"], [
+      [
+        ast.ValueExpr(xast.StringLiteral("bogus")),
+        ast.ValueExpr(xast.IntLiteral("1")),
+        ast.ValueExpr(xast.StringLiteral("y")),
+      ],
     ])
-  let assert Ok(cat) = ddl_semantics.analyze(catalog.empty(), stmt_create)
-  let stmt = insert("s6", ["note"], [[ast.ValueExpr(xast.StringLiteral("x"))]])
-  let assert Error([dml_semantics.InsertMissingHlcColumn(stream: "s6", span: _)]) =
-    dml_semantics.analyze(cat, stmt)
+  let assert Error(errors) = dml_semantics.analyze(base_catalog(), stmt)
+  assert list.contains(
+    errors,
+    dml_semantics.InsertSystemColumnInList(
+      column: catalog.hlc_column_name,
+      span: dummy_span(),
+    ),
+  )
 }
 
 pub fn insert_missing_required_column_test() {
-  let stmt = insert("s", ["id"], [[ast.ValueExpr(xast.StringLiteral("x"))]])
+  let stmt = insert("s", ["name"], [[ast.ValueExpr(xast.StringLiteral("y"))]])
   let assert Error(errors) = dml_semantics.analyze(base_catalog(), stmt)
   assert list.contains(
     errors,
@@ -184,23 +190,19 @@ pub fn insert_missing_required_column_test() {
 
 pub fn insert_column_count_mismatch_test() {
   let stmt =
-    insert("s", ["id", "a", "name"], [
+    insert("s", ["a", "name"], [
       [
-        ast.ValueExpr(xast.StringLiteral("x")),
         ast.ValueExpr(xast.IntLiteral("1")),
         ast.ValueExpr(xast.StringLiteral("y")),
       ],
-      [
-        ast.ValueExpr(xast.StringLiteral("x")),
-        ast.ValueExpr(xast.IntLiteral("1")),
-      ],
+      [ast.ValueExpr(xast.IntLiteral("1"))],
     ])
   let assert Error(errors) = dml_semantics.analyze(base_catalog(), stmt)
   assert list.contains(
     errors,
     dml_semantics.InsertColumnCountMismatch(
-      expected: 3,
-      got: 2,
+      expected: 2,
+      got: 1,
       row_index: 1,
       span: dummy_span(),
     ),
@@ -213,8 +215,6 @@ pub fn insert_column_count_mismatch_test() {
 
 const create_stream_example = "
   CREATE STREAM sensor_reading (
-    reading_hlc HLC,
-    reading_time TIMESTAMPTZ GENERATED ALWAYS AS (TIMESTAMPTZ_FROM_HLC(reading_hlc)) STORED,
     reading REAL CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100),
     units VARCHAR(32),
     sensor_id VARCHAR(24),
@@ -231,10 +231,10 @@ const alter_stream_example = "
 "
 
 const insert_example = "
-  INSERT INTO sensor_reading (reading_hlc, reading, units, sensor_id)
-  VALUES ('01a2B3c4D5e6f70abcde', 42.5, 'celsius', 'sensor-001')
+  INSERT INTO sensor_reading (reading, units, sensor_id)
+  VALUES (42.5, 'celsius', 'sensor-001')
   ON CONFLICT DO NOTHING
-  RETURNING reading_hlc, reading_time;
+  RETURNING _struo_hlc;
 "
 
 pub fn alter_then_insert_examples_analyze_clean_against_the_create_example_test() {

@@ -54,6 +54,16 @@ StruoDB follows PostgreSQL convention:
 - **Reserved words**: an unquoted identifier may not be one of StruoDB's
   own keywords (§3) or one of PostgreSQL's own reserved keywords (§3.5)
   either — quoting is required to use such a word as an identifier.
+- **Reserved prefix**: a *new* stream, column, or constraint name (i.e.
+  one being declared, not merely referenced) may not start with `_STRUO_`,
+  case-insensitively, quoted or not — reserved for the automatic system
+  columns (§9.2) and future system use. Unlike the length limit above,
+  this is a compile-time error, not silent truncation/passthrough. It's
+  checked only where a name is declared (`CREATE STREAM`/`ALTER STREAM`);
+  *referencing* an existing `_STRUO_`-prefixed name (a `column_ref`, a
+  `RETURNING` item) is unrestricted — it either names a real column and
+  resolves normally, or it doesn't and is already an ordinary "unknown
+  column"/"unknown stream" error.
 
 ## 3. Keywords
 
@@ -71,7 +81,6 @@ always a valid identifier.)
 * DATE
 * DECIMAL
 * DOUBLE
-* HLC
 * INT
 * INTEGER
 * INTERVAL
@@ -87,9 +96,6 @@ always a valid identifier.)
 * TIMESTAMPTZ
 * UUID
 * VARCHAR
-
-`HLC` is a fixed-width value — see §9.2 — and is not parameterized (unlike
-`CHAR`/`VARCHAR`/`DECIMAL`).
 
 ### 3.2 Value Keywords
 * FALSE
@@ -129,9 +135,8 @@ omitted from `ADD`/`DROP`/`ALTER COLUMN` (§10), StruoDB requires it, for
 the same explicitness-over-brevity reasons `CONSTRAINT constraint_name` is
 mandatory (§9.5). `ON`, `CONFLICT`, `DO`, and `NOTHING` appear together as
 the fixed sequence `ON CONFLICT DO NOTHING` (§11.5); there is no `DO
-UPDATE` form. Built-in functions such as
-`TIMESTAMPTZ_FROM_HLC` (§8.3) are deliberately **not** keywords — see §8.3
-for why.
+UPDATE` form. Built-in functions, once any are defined, are deliberately
+**not** keywords — see §8.3 for why.
 
 ### 3.4 Expression Keywords
 * AND
@@ -551,15 +556,15 @@ exist yet.
 
 A function call is an identifier immediately followed by `(`, a
 comma-separated list of zero or more expressions, and `)` — e.g.
-`TIMESTAMPTZ_FROM_HLC(reading_hlc)`. Function names are **ordinary
-identifiers, not keywords** — recognized by the transpiler only in
-function-call position, the same way PostgreSQL's own built-in functions
-like `now()` or `count()` aren't reserved words. A stream or column may be
-named `timestamptz_from_hlc` without conflict; only its use immediately
-followed by `(` is interpreted as a call.
+`GREATEST(reading, 0)`. Function names are **ordinary identifiers, not
+keywords** — recognized by the transpiler only in function-call position,
+the same way PostgreSQL's own built-in functions like `now()` or
+`count()` aren't reserved words. A stream or column may be named
+`greatest` without conflict; only its use immediately followed by `(` is
+interpreted as a call.
 
-No user-defined functions exist in StruoDB yet — only built-ins (starting
-with `TIMESTAMPTZ_FROM_HLC`, §9.7) can appear in function-call position.
+No built-in or user-defined functions are defined yet — see "Remaining
+open details."
 
 ## 9. CREATE STREAM
 
@@ -591,7 +596,6 @@ data_type ::= BIGINT
             | DATE
             | DECIMAL ('(' integer_literal (',' integer_literal)? ')')?
             | DOUBLE PRECISION
-            | HLC
             | INT
             | INTEGER
             | INTERVAL
@@ -621,11 +625,10 @@ data_type ::= BIGINT
   a valid `data_type`.
 - Every other keyword above is bare, with no parameters.
 
-This grammar doesn't express the semantic constraint in §9.2 (exactly one
-column must be typed `HLC`), the restriction in §9.4 (a `DEFAULT`
-expression may not reference a sibling column), or the uniqueness
-requirements below; all are enforced as semantic checks, not by the
-productions above.
+This grammar doesn't express the restriction in §9.4 (a `DEFAULT`
+expression may not reference a sibling column), the reserved-prefix rule
+(§2), or the uniqueness requirements below; all are enforced as semantic
+checks, not by the productions above.
 
 - **`column_name` must be unique within a stream** — a stream with two
   columns of the same name is a compile-time error. (Unstated in earlier
@@ -639,36 +642,50 @@ Whether `column_clause`s may repeat, combine freely, or must appear in a
 particular order (e.g. can a column have both `DEFAULT` and `CHECK`?) is
 not yet constrained — see "Remaining open details."
 
-### 9.2 The HLC Column
+### 9.2 The Automatic System Columns
 
-Every stream must declare **exactly one** column of type `HLC`. That
-column automatically becomes the `PRIMARY KEY` of the transpiled table —
-no `PRIMARY KEY` keyword exists or is needed. Unlike the earlier design
-(an implicit, reserved, client-populated column not visible in
-`CREATE STREAM`), the column is now ordinary: user-named, declared like
-any other column, and — per §9.3 — implicitly `NOT NULL` as a consequence
-of being the primary key.
+`HLC` is not a data type, and `CREATE STREAM` never declares a primary
+key column at all. Instead, every stream automatically gets 4 columns —
+none written in `CREATE STREAM`, none in `column_def`'s `data_type`
+grammar — prepended ahead of whatever the statement itself declares:
 
-Its value is supplied by the client using the hybrid logical clock already
-implemented in this repo (see `docs/hlc/spec.md`) and, being an ordinary
-column, is written like any other value in `INSERT` (§11) — a plain string
-literal (§4.3) holding the HLC's 15-character encoding.
+| Column                  | Type          | Holds                                    |
+|--------------------------|---------------|-------------------------------------------|
+| `_struo_hlc`             | `CHAR(15)`    | The whole encoded HLC value (`docs/hlc/spec.md`); the table's `PRIMARY KEY`. |
+| `_struo_hlc_timestamp`   | `TIMESTAMPTZ` | The HLC's embedded physical-time field, as a real timestamp. |
+| `_struo_hlc_count`       | `INTEGER`     | The HLC's embedded logical counter. |
+| `_struo_hlc_node_id`     | `INTEGER`     | The HLC's embedded node id, decoded from base-62 to its integer value. |
 
-A node that sends a duplicate HLC value is misbehaving (HLC values must
-be unique per docs/hlc/spec.md's node-ID discipline); the transpiled
-table's `PRIMARY KEY` constraint is what actually rejects it, unless
-`INSERT`'s `ON CONFLICT DO NOTHING` (§11.5) is used to absorb it silently.
-No additional StruoDB-level uniqueness logic is needed — this is a
-consequence of §9.2, not new machinery.
+Lower case, like every other unquoted identifier (§2) — these are never
+written in source at all, so there's no "user typed it uppercase" case to
+preserve; an uppercase name would only force `quote_identifier` to render
+it quoted for no functional reason, and would force a client to quote it
+too when referencing it (e.g. in `RETURNING`) to avoid its own unquoted
+spelling folding away from the catalog's exact-case key.
 
-Marking the `HLC` column `OPTIONAL` (§9.3) is a **compile-time error**: it
-contradicts the column's role as primary key. So is giving it a `DEFAULT`
-or `GENERATED ALWAYS AS (...)` clause (§9.4): the entire point of the
-column is that only the client — via its own hybrid logical clock state —
-knows the correct value to assign; a server-computed default would
-undermine that and risks producing non-monotonic or colliding values
-across nodes. This wasn't stated when §9.4 was written and is a gap this
-pass closes.
+All 4 are `NOT NULL` (`_struo_hlc` via `PRIMARY KEY`, same as before; the
+other 3 explicitly). This reverts to something like the *original*
+design this spec once described and then moved away from (an implicit,
+reserved, system-populated column) — except now split into 4 columns
+instead of 1, and populated by the codegen layer itself rather than by
+the client typing a value into `INSERT`: `INSERT` (§11) never accepts a
+value for any of them, the same way it never accepts one for a
+`GENERATED` column (§11.4) — every actual value comes from a live HLC
+clock instance passed to codegen at generation time, one fresh draw per
+row inserted.
+
+A node's clock producing a duplicate HLC value is misbehaving (HLC values
+must be unique per `docs/hlc/spec.md`'s node-ID discipline); the
+transpiled table's `PRIMARY KEY` constraint on `_struo_hlc` is what
+actually rejects it, unless `INSERT`'s `ON CONFLICT DO NOTHING` (§11.5)
+is used to absorb it silently. No additional StruoDB-level uniqueness
+logic is needed.
+
+**Reserved namespace.** No stream, column, or constraint name may be
+*declared* starting with `_STRUO_`, case-insensitively (§2) — reserved
+for these 4 columns and future system use. A stream may still
+*reference* one of them (e.g. `RETURNING _struo_hlc`) exactly like any
+other real column.
 
 ### 9.3 Nullability
 
@@ -706,7 +723,7 @@ different rules about what the expression may reference:
   - `VIRTUAL` computes the value at read time instead, storing nothing.
 
   One of the two must be written explicitly — there is no default if
-  omitted. `STORED` is the form the example in §9.7 needs.
+  omitted.
 
 ### 9.5 Constraints
 
@@ -725,22 +742,18 @@ different rules about what the expression may reference:
   (§10.5) unambiguous by name alone, the same way `column_name`
   uniqueness (§9.1) makes `DROP COLUMN`/`ALTER COLUMN` unambiguous.
 - **No `UNIQUE` constraint** exists for a stream, apart from the implicit
-  primary-key uniqueness on its `HLC` column (§9.2).
+  primary-key uniqueness on `_struo_hlc` (§9.2).
 - **Streams have no foreign keys.**
 
 ### 9.6 Built-in Functions
 
-See §8.3 for the general rule (ordinary identifiers, not keywords).
-`TIMESTAMPTZ_FROM_HLC` (used in §9.7 to derive a `TIMESTAMPTZ` from an
-`HLC` value's embedded physical-time field) is the first built-in
-function defined.
+See §8.3 for the general rule (ordinary identifiers, not keywords). No
+built-in functions are defined yet — see "Remaining open details."
 
 ### 9.7 Example
 
 ```
 CREATE STREAM sensor_reading (
-    reading_hlc HLC,
-    reading_time TIMESTAMPTZ GENERATED ALWAYS AS (TIMESTAMPTZ_FROM_HLC(reading_hlc)) STORED,
     reading REAL CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100),
     units VARCHAR(32),
     sensor_id VARCHAR(24),
@@ -748,10 +761,10 @@ CREATE STREAM sensor_reading (
 );
 ```
 
-(This corrects two things from the original working draft: `FLOAT` →
-`REAL`, since `FLOAT` isn't a data type keyword (§3.1); and `reading_time`
-now uses `GENERATED ALWAYS AS (...) STORED` rather than `DEFAULT`, since
-its expression references the sibling column `reading_hlc` — see §9.4.)
+(This corrects one thing from the original working draft: `FLOAT` →
+`REAL`, since `FLOAT` isn't a data type keyword (§3.1). The transpiled
+table also carries the 4 automatic system columns of §9.2, not written
+here at all.)
 
 ## 10. ALTER STREAM
 
@@ -794,16 +807,17 @@ added `column_def` **must** include at least one of:
 - `DEFAULT expr` (§9.4), or
 - `GENERATED ALWAYS AS (...) STORED`/`VIRTUAL` (§9.4)
 
-Adding a second column of type `HLC` is a **compile-time error** — exactly
-one `HLC` column per stream is fixed at `CREATE STREAM` time (§9.2) and
-can't change.
+The added column's name is subject to the same reserved-`_STRUO_`-prefix
+rule (§2) as `CREATE STREAM`'s own columns.
 
 ### 10.3 Dropping Columns
 
 `DROP COLUMN column_name` removes a column, allowed **only if the column
-is `OPTIONAL`** — a `NOT NULL` column may not be dropped. Since the `HLC`
-column can never be `OPTIONAL` (§9.2), this rule already makes it
-undroppable; no separate rule is needed to protect it.
+is `OPTIONAL`** — a `NOT NULL` column may not be dropped. None of the 4
+automatic system columns (§9.2) may ever be dropped, `OPTIONAL` or not —
+a **compile-time error** distinct from (and checked ahead of) the
+`OPTIONAL` rule, since the real reason is "not yours to drop," not
+incidentally failing the nullability check.
 
 ### 10.4 Altering Column Types
 
@@ -824,7 +838,9 @@ become invalid under the new type:
 
 Narrowing, and converting between unrelated type families (e.g. `INT` to
 `DECIMAL`), aren't addressed by this rule and are presumed disallowed for
-now — see "Remaining open details."
+now — see "Remaining open details." Targeting one of the 4 automatic
+system columns (§9.2) is a compile-time error, same as §10.3's drop
+restriction.
 
 ### 10.5 Constraints
 
@@ -911,9 +927,10 @@ The list may still be a **subset** of the stream's columns — any column
 left out is resolved the same way a bare `DEFAULT` value would be
 (§11.3): its own `DEFAULT`/`GENERATED` clause if it has one, `NULL` if
 it's `OPTIONAL` with neither, or an insert-time error if it's `NOT NULL`
-with neither. The `HLC` column (§9.2) has no `DEFAULT`/`GENERATED` clause
-and is never `OPTIONAL`, so it can never be left out in practice — it must
-always appear in the column list with an explicit value.
+with neither. The 4 automatic system columns (§9.2) may **never** appear
+in the column list at all — the same restriction §11.4 states for
+`GENERATED` columns — so they're always "left out," and always resolve to
+that row's freshly-drawn HLC value rather than any insert-time error.
 
 ### 11.3 Values
 
@@ -927,7 +944,7 @@ explicitly instead of left out.
 There's no `INSERT ... SELECT` form — only `VALUES` — since no querying
 grammar exists yet (§12).
 
-### 11.4 Generated Columns
+### 11.4 Generated and System Columns
 
 A column declared `GENERATED ALWAYS AS (...)` (§9.4) may **never** appear
 in the column list, not even paired with the `DEFAULT` placeholder value.
@@ -937,23 +954,31 @@ generated columns from the column list entirely, since they're never
 something an `INSERT` supplies — they're always computed from the row
 being inserted.
 
+The 4 automatic system columns (§9.2) are excluded from the column list
+the same way, for the same reason: their values are never client-supplied
+— codegen draws a fresh HLC value per row from a live clock instance
+and fills them in itself.
+
 ### 11.5 Conflict Handling
 
-`ON CONFLICT DO NOTHING`, if present, makes a duplicate `HLC` value a
-silent no-op instead of a `PRIMARY KEY`-violation error — for absorbing
+`ON CONFLICT DO NOTHING`, if present, makes a duplicate `_struo_hlc` value
+a silent no-op instead of a `PRIMARY KEY`-violation error — for absorbing
 redelivered/retried events, which is routine for an event-sourcing client,
-not exceptional. No conflict target (a column list or constraint name, as
-PostgreSQL's `ON CONFLICT` generally requires or allows) is written or
-needed: a stream has exactly one possible source of conflict, its `HLC`
-primary key (§9.5 — there's no `UNIQUE` constraint to disambiguate
-between), so `ON CONFLICT DO NOTHING` is unambiguous as written.
+not exceptional (this is now more of a defensive measure than an expected
+occurrence, since `_struo_hlc` is drawn fresh from a live clock per row
+rather than client-supplied — see §9.2). No conflict target (a column
+list or constraint name, as PostgreSQL's `ON CONFLICT` generally requires
+or allows) is written or needed: a stream has exactly one possible source
+of conflict, its `_struo_hlc` primary key (§9.5 — there's no `UNIQUE`
+constraint to disambiguate between), so `ON CONFLICT DO NOTHING` is
+unambiguous as written.
 
 There is no `DO UPDATE` form. Streams are an append-only log; silently
 rewriting a previously-inserted row on conflict doesn't fit that model,
 so only the no-op form is offered.
 
-The clause is optional. Without it, a duplicate `HLC` is a hard error,
-exactly as it would be in plain SQL.
+The clause is optional. Without it, a duplicate `_struo_hlc` is a hard
+error, exactly as it would be in plain SQL.
 
 ### 11.6 RETURNING
 
@@ -970,17 +995,17 @@ inserted anything new.
 ### 11.7 Example
 
 ```
-INSERT INTO sensor_reading (reading_hlc, reading, units, sensor_id)
-VALUES ('01a2B3c4D5e6f70abcde', 42.5, 'celsius', 'sensor-001')
+INSERT INTO sensor_reading (reading, units, sensor_id)
+VALUES (42.5, 'celsius', 'sensor-001')
 ON CONFLICT DO NOTHING
-RETURNING reading_hlc, reading_time;
+RETURNING _struo_hlc;
 ```
 
-(`reading_time`, `GENERATED ALWAYS AS (...) STORED` in §9.7's
-`CREATE STREAM`, is correctly omitted from the column list per §11.4, and
-its computed value is read back via `RETURNING` per §11.6. `notes`,
-`OPTIONAL` with no `DEFAULT`, is omitted from the column list and
-resolves to `NULL` per §11.2.)
+(The 4 automatic system columns are correctly omitted from the column
+list per §11.4; `_struo_hlc` reads back the value codegen actually
+assigned this row via `RETURNING`, per §11.6. `notes`, `OPTIONAL` with no
+`DEFAULT`, is omitted
+from the column list and resolves to `NULL` per §11.2.)
 
 ## 12. Querying and Subscribing
 
@@ -996,13 +1021,16 @@ above can be read in context and aren't re-litigated later:
 - **Scope, for now: expressions/function calls, `CREATE STREAM`,
   `ALTER STREAM`, and `INSERT`.** See §7.
 - **Fixed per-stream schema.** See §7.
-- **The `HLC` column is ordinary, user-declared, and exactly one per
-  stream** — see §9.2. (This supersedes an earlier design where the
-  event-time column was implicit, reserved, and invisible in
-  `CREATE STREAM`; that design's open questions — the column's reserved
-  name, its exact type, and how a client would supply its value through
-  `INSERT` — are moot now that the column is just a normal, user-named,
-  user-typed column like any other.)
+- **`HLC` is not a data type; every stream automatically gets 4 fixed,
+  system-populated `_struo_hlc...` columns, never written in
+  `CREATE STREAM`** — see §9.2. (This supersedes an intervening design
+  where the event-time column was an ordinary, user-declared `HLC`
+  column; that design's own supersession note — reverting to something
+  like the *original* implicit/reserved/system-populated design, this
+  time split into 4 columns and populated by codegen from a live clock
+  instance rather than typed by the client into `INSERT` — is this
+  bullet.) Any stream/column/constraint name starting with `_STRUO_` is
+  reserved and rejected at declaration time — see §2.
 - **`NOT NULL` by default; `OPTIONAL` for nullable; explicit `NOT NULL` is
   a compile-time error.** A deliberate inversion of PostgreSQL's own
   default — see §9.3.
@@ -1056,21 +1084,22 @@ above can be read in context and aren't re-litigated later:
 - **Replacing a `CHECK` constraint must produce a stronger constraint**,
   though the verification mechanism for that isn't decided yet. See
   §10.5.
-- **The `HLC` column may not have a `DEFAULT`/`GENERATED` clause either**,
-  not just not `OPTIONAL` — only the client's own hybrid logical clock
-  state can produce a correct value. See §9.2.
 - **`INSERT`'s column list is mandatory**, unlike standard SQL's
   positional form — self-documenting and immune to `ALTER STREAM`
   reordering columns. See §11.2.
-- **`GENERATED` columns are excluded from the `INSERT` column list
-  entirely** — simpler than PostgreSQL's DEFAULT-only carve-out for them.
-  See §11.4.
+- **`GENERATED` and the 4 automatic system columns are excluded from the
+  `INSERT` column list entirely** — simpler than PostgreSQL's
+  DEFAULT-only carve-out for `GENERATED`; the system columns are never
+  client-supplied at all, drawn instead from a live HLC clock instance
+  passed to codegen, one draw per row. See §11.4.
 - **`INSERT` gains a built-in `ON CONFLICT DO NOTHING`**, with no conflict
   target needed since a stream has exactly one possible source of
-  conflict (its `HLC` primary key); there is no `DO UPDATE` form, since an
-  append-only stream shouldn't silently rewrite a prior row. See §11.5.
+  conflict (its `_struo_hlc` primary key); there is no `DO UPDATE` form,
+  since an append-only stream shouldn't silently rewrite a prior row. See
+  §11.5.
 - **`INSERT` supports `RETURNING`**, including reading back a `GENERATED`
-  column's computed value. See §11.6.
+  column's computed value or a system column's server-assigned one. See
+  §11.6.
 - **`INSERT INTO stream_name` doesn't repeat `STREAM`** — matching plain
   SQL rather than `CREATE STREAM`/`ALTER STREAM`'s own pattern. See §11.1.
 
@@ -1104,3 +1133,7 @@ resolving eventually:
 - `[ ]` array subscript and `.` used within an expression (as opposed to
   as a qualified-name separator, §5.8) — the two PostgreSQL precedence-
   table entries §8.2 still doesn't populate; no array types exist yet.
+- No built-in functions are defined yet (§8.3, §9.6) — the earlier
+  `TIMESTAMPTZ_FROM_HLC` was never implemented and is retired along with
+  the `HLC` data type it depended on (§9.2); function-call position
+  currently accepts any identifier, unchecked against any allowlist.

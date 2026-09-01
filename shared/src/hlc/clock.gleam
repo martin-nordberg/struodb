@@ -26,10 +26,24 @@ pub type HlcError {
 pub opaque type ClockMessage {
   /// Requests the next HLC value for a local event.
   Next(reply_to: Subject(String))
+  /// Requests the next HLC value for a local event, decomposed into its
+  /// three encoded fields — see `HlcParts`.
+  NextParts(reply_to: Subject(HlcParts))
   /// Merges in an HLC value received from another node.
   Merge(remote: String, reply_to: Subject(Result(String, HlcError)))
   /// Sent to end the process.
   StopClock
+}
+
+/// One `next()` draw, already decomposed into its three encoded fields —
+/// for a caller (e.g. streams/lang/dml_codegen.gleam) that needs the
+/// physical time/counter/node id individually rather than re-parsing
+/// `encoded` itself. `node_id` is decoded to its integer value (base-62
+/// digits, per docs/hlc/spec.md), even though the field is otherwise
+/// opaque/caller-assigned — decoding it is a well-defined, reversible
+/// operation regardless of what the digits are taken to mean.
+pub type HlcParts {
+  HlcParts(encoded: String, physical_time_ms: Int, counter: Int, node_id: Int)
 }
 
 //-----------------------------------------------------------------------------
@@ -73,6 +87,15 @@ pub fn next(clock: Subject(ClockMessage)) -> String {
   actor.call(clock, waiting: call_timeout_ms, sending: Next)
 }
 
+/// Returns the next HLC value for a local event on this node, the same
+/// as `next`, but already decomposed into its three encoded fields — see
+/// `HlcParts`. Avoids a redundant encode-then-decode round trip: the
+/// actor already has `physical_time_ms`/`counter`/`node_id` in hand right
+/// before encoding them for `next`.
+pub fn next_parts(clock: Subject(ClockMessage)) -> HlcParts {
+  actor.call(clock, waiting: call_timeout_ms, sending: NextParts)
+}
+
 /// Merges in an HLC value received from another node, advancing this
 /// node's clock if needed. Returns an error, leaving this node's clock
 /// unchanged if `remote` is not a well-formed 15-character HLC value.
@@ -113,6 +136,24 @@ fn handle_message(
     Next(reply_to) -> {
       let new_state = advance(state)
       actor.send(reply_to, encode_value(new_state))
+      actor.continue(new_state)
+    }
+
+    NextParts(reply_to) -> {
+      let new_state = advance(state)
+      // Safe: `new_state.node_id` was already validated as well-formed
+      // base-62 once, in `start()` — `validate_node_id` — and never
+      // changes after that.
+      let assert Ok(node_id) = base62.decode(new_state.node_id)
+      actor.send(
+        reply_to,
+        HlcParts(
+          encoded: encode_value(new_state),
+          physical_time_ms: new_state.physical_time_ms,
+          counter: new_state.counter,
+          node_id: node_id,
+        ),
+      )
       actor.continue(new_state)
     }
 

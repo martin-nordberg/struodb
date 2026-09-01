@@ -51,7 +51,6 @@ pub fn bare_data_type_keywords_parse_test() {
   assert data_type_of("BIGINT") == xast.DtBigint
   assert data_type_of("BOOLEAN") == xast.DtBoolean
   assert data_type_of("DATE") == xast.DtDate
-  assert data_type_of("HLC") == xast.DtHlc
   assert data_type_of("INT") == xast.DtInt
   assert data_type_of("INTEGER") == xast.DtInteger
   assert data_type_of("INTERVAL") == xast.DtInterval

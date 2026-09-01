@@ -61,7 +61,6 @@ pub type Keyword {
   KwDate
   KwDecimal
   KwDouble
-  KwHlc
   KwInt
   KwInteger
   KwInterval

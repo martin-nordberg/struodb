@@ -28,13 +28,15 @@ final shape, not a stopgap.
   all of them in order against a threaded `Catalog` and return the
   equivalent PostgreSQL, formatted — a single function from `String` to
   `Result(String, CodegenError)` (plus a `Catalog`-threading variant for
-  multi-batch callers; see below). This is pure text generation.
+  multi-batch callers; see below). DDL codegen (`ddl_codegen.generate`)
+  is pure text generation; DML codegen (`dml_codegen.generate`) is not —
+  see "The 4 automatic system columns..." below — it additionally takes a
+  live HLC clock instance (`hlc/clock.start`) and draws one fresh value
+  per row actually inserted, so two calls with identical arguments but
+  different clock state render different SQL.
 - **Out of scope**: actually connecting to or running anything against a
-  database; managing migration files; deciding *how* `TIMESTAMPTZ_FROM_HLC`
-  (or any future built-in) is itself implemented in the target database —
-  codegen emits a call to it and assumes it already exists there (see
-  "Issues" below). Also out of scope, unchanged from the parent plan:
-  anything under spec.md §12 (querying/subscribing).
+  database; managing migration files. Also out of scope, unchanged from
+  the parent plan: anything under spec.md §12 (querying/subscribing).
 
 ## Design decisions
 
@@ -119,15 +121,36 @@ final shape, not a stopgap.
   never-quoted one — but it does mean the *only* way `order` ever reaches
   codegen unquoted-looking is if it was deliberately quoted in the
   source, never by accident, which is what actually mattered about this
-  design decision from the start. Function-call names are unaffected by
-  any of this either way: emitted bare, lower-case, unquoted, since today
-  they're only ever one of a small, project-controlled set of built-ins
-  (§8.3), not arbitrary user-chosen identifiers.
-- **The `HLC` column transpiles to `CHAR(15)`, inlined `PRIMARY KEY`, no
-  explicit `NOT NULL`** (redundant once `PRIMARY KEY` is present).
-  `docs/hlc/spec.md` states the encoding is fixed-width, 15 characters,
-  "chosen specifically so the value fits a PostgreSQL `char(15)` column
-  with no padding" — this is that decision cashed in, not a new one.
+  design decision from the start. Function-call names go through
+  `quote_identifier` the same as any other identifier, **not** emitted
+  bare/unquoted — a later review found the parser doesn't actually
+  restrict function-call position to a fixed built-in set (a quoted
+  identifier is legal there too, and can carry arbitrary content), so an
+  unquoted, unescaped function name was a SQL-injection vector; quoting
+  it costs nothing for an actual built-in name (already "safe unquoted")
+  and neutralizes anything else.
+- **The 4 automatic system columns (`_struo_hlc`/`_struo_hlc_timestamp`/
+  `_struo_hlc_count`/`_struo_hlc_node_id`) are rendered as 4 fixed lines,
+  prepended ahead of the user's own `column_def`s** — not derived from
+  anything in the parsed `DdlStatement` at all, since `CREATE STREAM`
+  never declares them (spec.md §9.2). `_struo_hlc` is inlined
+  `PRIMARY KEY`, no explicit `NOT NULL` (redundant once `PRIMARY KEY` is
+  present); the other 3 get an explicit `NOT NULL`. `docs/hlc/spec.md`
+  states the encoding is fixed-width, 15 characters, "chosen specifically
+  so the value fits a PostgreSQL `char(15)` column with no padding" —
+  `_struo_hlc CHAR(15)` is that decision cashed in, not a new one.
+- **`dml_codegen`'s `INSERT` rendering draws one fresh HLC value per row,
+  not per statement** — `clock.next_parts` (`hlc/clock.gleam`) is called
+  once for every row across every `INSERT` in the source, in row order,
+  and each draw's 4 decomposed fields become that row's leading 4
+  values (`_struo_hlc` a quoted string literal; `_struo_hlc_timestamp`
+  `to_timestamp(<seconds>.<millis>)` — a standard PostgreSQL builtin
+  converting Unix-epoch seconds to `TIMESTAMPTZ`, computed via plain
+  integer arithmetic on `physical_time_ms` rather than any float
+  round-tripping; `_struo_hlc_count`/`_struo_hlc_node_id` plain integers).
+  `next_parts` (not `next` + a separate decode) exists specifically to
+  avoid an encode-then-decode round trip, since the clock actor already
+  has the 3 raw fields in hand right before encoding them.
 - **StruoDB's precedence table doubles as the pretty-printer's
   reparenthesization table.** `expr_ast.gleam`'s `Expr` has no `Paren`
   node (parenthesization is only ever a parsing-time concern) and most
@@ -221,9 +244,15 @@ pub fn generate(
 pub fn generate_standalone(source: String) -> Result(String, CodegenError)
 ```
 
-`streams/src/lang/dml_codegen.gleam` mirrors this shape exactly, against
+`streams/src/lang/dml_codegen.gleam` mirrors this shape against
 `DmlStatement`/`dml_semantics.SemanticError`/`ep.ParseError`, one package
-over. Whether a caller needing *both* (a migration/deploy tool driving
+over — with one real difference, not just a type substitution: both
+`generate` and `generate_standalone` there take an extra
+`clock: Subject(ClockMessage)` parameter (`hlc/clock.start`), since
+`insert_to_sql` draws a fresh HLC value per row from it (see "Design
+decisions" above) rather than being a pure function of `catalog`/
+`source` alone. Whether a caller needing *both* (a migration/deploy tool
+driving
 `schema` and `streams` together) belongs in one of these two packages, a
 new orchestration layer, or stays entirely out of scope for `lang/`
 itself is the open question in "Issues" below — neither `generate` as
@@ -305,7 +334,6 @@ decisions").
 | `DtDate`                    | `DATE`                                         |
 | `DtDecimal(p, s)`           | `DECIMAL(p, s)` / `DECIMAL(p)` / bare `DECIMAL`, per which of `p`/`s` are `Some` |
 | `DtDouble`                  | `DOUBLE PRECISION`                              |
-| `DtHlc`                      | `CHAR(15)` — see "Design decisions"             |
 | `DtInt` / `DtInteger`       | `INTEGER` (PostgreSQL's canonical spelling for both) |
 | `DtInterval`                 | `INTERVAL`                                     |
 | `DtJson`                     | `JSON`                                         |
@@ -352,24 +380,25 @@ possible without needing a `Span` to recover which one the user wrote.
 `~` (their own textual spelling; PostgreSQL disambiguates the same way
 StruoDB's own parser does, by position).
 
-`FunctionCall(name, args)` → `name(arg1, arg2, ...)`, `name` bare/
-lower-case/unquoted (see "Design decisions"), each `arg` rendered at the
-loosest level (function-call arguments never need outer parens beyond
-the call's own).
+`FunctionCall(name, args)` → `name(arg1, arg2, ...)`, `name` quoted the
+same as any other identifier (see "Design decisions"), each `arg`
+rendered at the loosest level (function-call arguments never need outer
+parens beyond the call's own).
 
 ## Statement codegen
 
 - **`CreateStream`**: `CREATE TABLE "name" (\n  col1,\n  col2,\n  ...,\n
   CONSTRAINT ...\n);`, one column/table-constraint per line, 2-space
   indent (matching `gleam format`'s own indent width elsewhere in this
-  codebase). Each `ColumnDef` renders as `"name" TYPE [NOT NULL |
-  <nothing if OPTIONAL>] [DEFAULT expr] [GENERATED ALWAYS AS (expr)
-  STORED] [PRIMARY KEY if this is the HLC column]`; each column-level
-  `CHECK` becomes its own trailing `CONSTRAINT "name" CHECK (expr)` line
-  rather than an inline column constraint, for a uniform, simple
-  rendering of both column-level and table-level checks (PostgreSQL
-  accepts a named `CONSTRAINT` clause in either position; there's no
-  behavioral difference, only where it's textually attached).
+  codebase). The 4 automatic system-column lines come first, unconditionally
+  (see "Design decisions"), ahead of the `DdlStatement`'s own columns.
+  Each user `ColumnDef` renders as `"name" TYPE [NOT NULL | <nothing if
+  OPTIONAL>] [DEFAULT expr] [GENERATED ALWAYS AS (expr) STORED]`; each
+  column-level `CHECK` becomes its own trailing `CONSTRAINT "name" CHECK
+  (expr)` line rather than an inline column constraint, for a uniform,
+  simple rendering of both column-level and table-level checks
+  (PostgreSQL accepts a named `CONSTRAINT` clause in either position;
+  there's no behavioral difference, only where it's textually attached).
 - **`AlterStream`**: `ALTER TABLE "name"\n  action1,\n  action2,\n
   ...;` — one `ALTER TABLE` per `AlterStream`, all of its actions as
   comma-separated sub-clauses (matching PostgreSQL's own support for
@@ -448,8 +477,6 @@ Given, back to back:
 
 ```
 CREATE STREAM sensor_reading (
-    reading_hlc HLC,
-    reading_time TIMESTAMPTZ GENERATED ALWAYS AS (TIMESTAMPTZ_FROM_HLC(reading_hlc)) STORED,
     reading REAL CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100),
     units VARCHAR(32),
     sensor_id VARCHAR(24),
@@ -462,18 +489,21 @@ ALTER STREAM sensor_reading
     DROP CONSTRAINT reading_in_range,
     ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90);
 
-INSERT INTO sensor_reading (reading_hlc, reading, units, sensor_id)
-VALUES ('01a2B3c4D5e6f70abcde', 42.5, 'celsius', 'sensor-001')
+INSERT INTO sensor_reading (reading, units, sensor_id)
+VALUES (42.5, 'celsius', 'sensor-001')
 ON CONFLICT DO NOTHING
-RETURNING reading_hlc, reading_time;
+RETURNING _struo_hlc;
 ```
 
-`generate_standalone` on the above should produce:
+`generate_standalone` on the `CREATE STREAM`/`ALTER STREAM` pair should
+produce:
 
 ```sql
 CREATE TABLE sensor_reading (
-  reading_hlc CHAR(15) PRIMARY KEY,
-  reading_time TIMESTAMPTZ GENERATED ALWAYS AS (timestamptz_from_hlc(reading_hlc)) STORED,
+  _struo_hlc CHAR(15) PRIMARY KEY,
+  _struo_hlc_timestamp TIMESTAMPTZ NOT NULL,
+  _struo_hlc_count INTEGER NOT NULL,
+  _struo_hlc_node_id INTEGER NOT NULL,
   reading REAL NOT NULL,
   units VARCHAR(32) NOT NULL,
   sensor_id VARCHAR(24) NOT NULL,
@@ -486,12 +516,20 @@ ALTER TABLE sensor_reading
   ALTER COLUMN units TYPE VARCHAR(64),
   DROP CONSTRAINT reading_in_range,
   ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90);
+```
 
-INSERT INTO sensor_reading (reading_hlc, reading, units, sensor_id)
+`dml_codegen.generate` on the `INSERT`, given a clock instance, should
+produce (`<hlc>`/`<seconds.millis>`/`<counter>`/`<node_id>` standing for
+that call's actual draw from `clock.next_parts` — unlike the `CREATE`/
+`ALTER` output above, this is not a fixed string; two calls against
+different clock state render different values here):
+
+```sql
+INSERT INTO sensor_reading (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, reading, units, sensor_id)
 VALUES
-  ('01a2B3c4D5e6f70abcde', 42.5, 'celsius', 'sensor-001')
+  ('<hlc>', to_timestamp(<seconds.millis>), <counter>, <node_id>, 42.5, 'celsius', 'sensor-001')
 ON CONFLICT DO NOTHING
-RETURNING reading_hlc, reading_time;
+RETURNING _struo_hlc;
 ```
 
 (None of these identifiers need quoting: every one is already all-lowercase
@@ -586,17 +624,16 @@ worth a decision before or during implementation:
   version(s) this project actually targets, since that determines
   whether a *more* literal `VIRTUAL` translation ever becomes possible
   or desirable later.
-- **`TIMESTAMPTZ_FROM_HLC` (and any future built-in) has no defined
-  PostgreSQL-side implementation anywhere in this repository.** Codegen
-  emits a bare call to it and assumes a same-named function already
-  exists in the target database — but nothing here designs, generates,
-  or documents that function itself (presumably a small PL/pgSQL
-  function decoding the physical-time field from `docs/hlc/spec.md`'s
-  encoding). Out of scope for this plan by its own "Scope" section, but
-  worth tracking as a real gap: a stream using this built-in can't
-  actually be queried successfully against a fresh database without it.
-- **`HLC` → `CHAR(15)` vs. `TEXT` + a length `CHECK`.** `CHAR(n)` in
-  PostgreSQL blank-pads values shorter than `n` and has a
+- **Any future built-in function has no defined PostgreSQL-side
+  implementation anywhere in this repository.** No built-ins are defined
+  yet (spec.md §9.6) — `FunctionCall`'s `name` is currently unchecked
+  against any allowlist (see "Design decisions" above, the SQL-injection
+  fix), so this is purely hypothetical until one is actually added: once
+  it is, codegen would emit a bare call to it and assume a same-named
+  function already exists in the target database, with nothing here
+  designing, generating, or documenting that function itself.
+- **`_struo_hlc` → `CHAR(15)` vs. `TEXT` + a length `CHECK`.** `CHAR(n)`
+  in PostgreSQL blank-pads values shorter than `n` and has a
   (mild, debated) reputation for surprising comparison/storage behavior
   relative to `TEXT`/`VARCHAR` — moot here since HLC values are always
   exactly 15 characters by construction (no padding ever actually
@@ -619,7 +656,7 @@ worth a decision before or during implementation:
   at worst, not a correctness one.
 - **Table-level vs. inline `PRIMARY KEY`/column-level `CHECK` placement**
   is an arbitrary rendering choice in "Statement codegen" above
-  (inlined `PRIMARY KEY` on the `HLC` column; every `CHECK`, column-level
+  (inlined `PRIMARY KEY` on `_struo_hlc`; every `CHECK`, column-level
   or table-level in the source, rendered as a trailing table-level
   `CONSTRAINT` line) — PostgreSQL accepts either placement for both with
   no behavioral difference, so this is pure style, easy to change later

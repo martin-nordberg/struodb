@@ -19,12 +19,13 @@ import lang/token.{type Span}
 //-----------------------------------------------------------------------------
 
 pub type SemanticError {
-  MissingHlcColumn(stream: String, span: Span)
-  MultipleHlcColumns(stream: String, first: String, second: String, span: Span)
-  /// §9.2
-  HlcColumnOptional(column: String, span: Span)
-  /// §9.2
-  HlcColumnHasDefaultOrGenerated(column: String, span: Span)
+  /// A stream, column, or constraint name started with `_STRUO_`
+  /// (case-insensitive), reserved for future system use — see spec.md
+  /// §2 and `is_reserved_name` below.
+  ReservedIdentifier(name: String, span: Span)
+  /// `DROP COLUMN`/`ALTER COLUMN TYPE` targeted one of the 4 automatic
+  /// system columns (spec.md §9.2) — never a user's to modify or drop.
+  SystemColumnNotModifiable(column: String, span: Span)
   /// §9.4. `span` is the offending `ColumnRef`'s own span, not the
   /// enclosing `DEFAULT`'s — see "Expression-level spans" in the plan.
   DefaultReferencesColumn(column: String, referenced: String, span: Span)
@@ -35,8 +36,6 @@ pub type SemanticError {
   UnknownStream(name: String, span: Span)
   /// §10.2
   AddColumnNeedsOptionalOrDefault(column: String, span: Span)
-  /// §10.2
-  AddSecondHlcColumn(column: String, span: Span)
   /// §10.3
   DropNonOptionalColumn(column: String, span: Span)
   DropUnknownColumn(column: String, span: Span)
@@ -116,18 +115,7 @@ fn apply_create_stream(
       list.flat_map(cols, fn(c) { c.checks }),
       table_constraints(elements),
     )
-  // `check_create_stream`'s own `hlc_count_errors` already confirmed
-  // exactly one column is typed `HLC` — `analyze` never calls this
-  // otherwise.
-  let assert [hlc, ..] = hlc_columns(cols)
-    as "apply_create_stream: no HLC column found on an already-validated CreateStream"
-  catalog.create_stream(
-    cat,
-    name,
-    list.map(cols, to_column_schema),
-    hlc.name,
-    checks,
-  )
+  catalog.create_stream(cat, name, list.map(cols, to_column_schema), checks)
 }
 
 fn to_column_schema(col: ast.ColumnDef) -> catalog.ColumnSchema {
@@ -137,6 +125,10 @@ fn to_column_schema(col: ast.ColumnDef) -> catalog.ColumnSchema {
     optional: col.optional,
     default: col.default,
     generated: col.generated,
+    // Every AST-derived column is user-declared by construction — the 4
+    // system columns are never built this way; see catalog.gleam's
+    // `system_columns()`.
+    system: False,
   )
 }
 
@@ -182,13 +174,16 @@ fn check_create_stream(
     find_duplicates(list.map(cols, fn(c) { #(c.name, c.span) }), fn(name, s) {
       DuplicateColumnName(stream: stream_name, name: name, span: s)
     }),
-    // 2. Exactly one HLC column.
-    hlc_count_errors(stream_name, cols, span),
-    // 3. That column: not OPTIONAL, no DEFAULT/GENERATED.
-    hlc_shape_errors(cols),
-    // 4. DEFAULT may not reference any column, sibling or otherwise.
+    // 2. No stream/column/constraint name may start with `_STRUO_` —
+    // reserved for the automatic system columns (spec.md §2, §9.2).
+    reserved_name_errors(stream_name, span),
+    list.flat_map(cols, fn(c) { reserved_name_errors(c.name, c.span) }),
+    list.flat_map(all_checks, fn(c) {
+      reserved_name_errors(c.constraint_name, c.span)
+    }),
+    // 3. DEFAULT may not reference any column, sibling or otherwise.
     list.flat_map(cols, check_default_has_no_column_refs),
-    // 5. GENERATED/CHECK may only reference this stream's own columns.
+    // 4. GENERATED/CHECK may only reference this stream's own columns.
     list.flat_map(cols, fn(c) {
       case c.generated {
         None -> []
@@ -207,7 +202,7 @@ fn check_create_stream(
         UnknownColumnReference,
       )
     }),
-    // 6. Constraint names unique within the stream (column-level and
+    // 5. Constraint names unique within the stream (column-level and
     // table-level together), same `postgres_name` comparison as (1).
     find_duplicates(
       list.map(all_checks, fn(c) { #(c.constraint_name, c.span) }),
@@ -215,7 +210,7 @@ fn check_create_stream(
         DuplicateConstraintName(stream: stream_name, name: name, span: s)
       },
     ),
-    // 7. data_type parameter sanity, per §9.1's data_type grammar.
+    // 6. data_type parameter sanity, per §9.1's data_type grammar.
     list.flat_map(cols, check_data_type_params),
   ])
 }
@@ -240,49 +235,21 @@ fn table_constraints(
   })
 }
 
-fn hlc_columns(cols: List(ast.ColumnDef)) -> List(ast.ColumnDef) {
-  list.filter(cols, fn(c) { c.data_type == xast.DtHlc })
+/// True for any name starting with `_STRUO_`, case-insensitively —
+/// reserved for future system use (spec.md §2). Checked wherever a
+/// *new* stream/column/constraint name is declared; a mere *reference*
+/// (a `column_ref`, a `RETURNING` item) needs no special handling here —
+/// it either names a real column (one of the 4 automatic system columns
+/// included) and resolves normally, or it doesn't and is already an
+/// ordinary `UnknownColumnReference`/`UnknownStream`.
+fn is_reserved_name(name: String) -> Bool {
+  string.starts_with(string.lowercase(name), "_struo_")
 }
 
-fn hlc_count_errors(
-  stream_name: String,
-  cols: List(ast.ColumnDef),
-  span: Span,
-) -> List(SemanticError) {
-  case hlc_columns(cols) {
-    [] -> [MissingHlcColumn(stream: stream_name, span: span)]
-    [_] -> []
-    [first, second, ..] -> [
-      MultipleHlcColumns(
-        stream: stream_name,
-        first: first.name,
-        second: second.name,
-        span: span,
-      ),
-    ]
-  }
-}
-
-fn hlc_shape_errors(cols: List(ast.ColumnDef)) -> List(SemanticError) {
-  case hlc_columns(cols) {
-    // Ambiguous (or nonexistent) which column to check further —
-    // `hlc_count_errors` above already reports the real problem.
-    [hlc] -> {
-      let optional_err = case hlc.optional {
-        True -> [HlcColumnOptional(column: hlc.name, span: hlc.span)]
-        False -> []
-      }
-      let default_or_generated_err = case
-        option.is_some(hlc.default) || option.is_some(hlc.generated)
-      {
-        True -> [
-          HlcColumnHasDefaultOrGenerated(column: hlc.name, span: hlc.span),
-        ]
-        False -> []
-      }
-      list.append(optional_err, default_or_generated_err)
-    }
-    _ -> []
+fn reserved_name_errors(name: String, span: Span) -> List(SemanticError) {
+  case is_reserved_name(name) {
+    True -> [ReservedIdentifier(name: name, span: span)]
+    False -> []
   }
 }
 
@@ -477,19 +444,14 @@ fn check_add_column(
     True -> []
     False -> [AddColumnNeedsOptionalOrDefault(column: col.name, span: col.span)]
   }
-  let second_hlc_err = case col.data_type {
-    xast.DtHlc -> [AddSecondHlcColumn(column: col.name, span: col.span)]
-    _ -> []
-  }
-
   list.flatten([
+    reserved_name_errors(col.name, col.span),
     duplicate_err,
     generated_err,
     check_default_has_no_column_refs(col),
     check_err,
     check_data_type_params(col),
     needs_default_err,
-    second_hlc_err,
   ])
 }
 
@@ -501,9 +463,13 @@ fn check_drop_column(
   case dict.get(schema.columns, column_name) {
     Error(Nil) -> [DropUnknownColumn(column: column_name, span: span)]
     Ok(col) ->
-      case col.optional {
-        True -> []
-        False -> [DropNonOptionalColumn(column: column_name, span: span)]
+      case col.system {
+        True -> [SystemColumnNotModifiable(column: column_name, span: span)]
+        False ->
+          case col.optional {
+            True -> []
+            False -> [DropNonOptionalColumn(column: column_name, span: span)]
+          }
       }
   }
 }
@@ -520,6 +486,9 @@ fn check_alter_column_type(
     // explicitly offered there as one option ("reuse DropUnknownColumn's
     // shape or a dedicated variant — open question, naming only").
     Error(Nil) -> [DropUnknownColumn(column: column_name, span: span)]
+    Ok(col) if col.system -> [
+      SystemColumnNotModifiable(column: column_name, span: span),
+    ]
     Ok(col) ->
       case classify_type_change(col.data_type, new_type) {
         Widening -> []
@@ -655,14 +624,15 @@ fn check_add_constraint(
       ),
     ]
   }
-  list.append(
+  list.flatten([
+    reserved_name_errors(check.constraint_name, check.span),
     duplicate_err,
     expr_semantics.check_expr_column_refs(
       check.expr,
       dict.keys(schema.columns),
       UnknownColumnReference,
     ),
-  )
+  ])
 }
 
 fn check_drop_constraint(

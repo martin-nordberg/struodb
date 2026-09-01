@@ -157,10 +157,8 @@ pub fn is_distinct_from_test() {
 }
 
 pub fn function_call_test() {
-  let assert xast.FunctionCall(
-    "timestamptz_from_hlc",
-    [xast.ColumnRef("reading_hlc", _)],
-  ) = parse_expr("TIMESTAMPTZ_FROM_HLC(reading_hlc)")
+  let assert xast.FunctionCall("greatest", [xast.ColumnRef("reading", _)]) =
+    parse_expr("GREATEST(reading)")
 }
 
 pub fn function_call_with_no_args_test() {
@@ -252,8 +250,6 @@ pub fn outer_not_wraps_an_unnegated_between_test() {
 pub fn create_stream_example_round_trips_test() {
   let source =
     "CREATE STREAM sensor_reading (
-      reading_hlc HLC,
-      reading_time TIMESTAMPTZ GENERATED ALWAYS AS (TIMESTAMPTZ_FROM_HLC(reading_hlc)) STORED,
       reading REAL CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100),
       units VARCHAR(32),
       sensor_id VARCHAR(24),
@@ -263,30 +259,6 @@ pub fn create_stream_example_round_trips_test() {
   let assert ast.CreateStream(
     name: "sensor_reading",
     elements: [
-      ast.Column(ast.ColumnDef(
-        name: "reading_hlc",
-        data_type: xast.DtHlc,
-        optional: False,
-        default: None,
-        generated: None,
-        checks: [],
-        span: _,
-      )),
-      ast.Column(ast.ColumnDef(
-        name: "reading_time",
-        data_type: xast.DtTimestamptz,
-        optional: False,
-        default: None,
-        generated: Some(xast.GeneratedClause(
-          xast.FunctionCall(
-            "timestamptz_from_hlc",
-            [xast.ColumnRef("reading_hlc", _)],
-          ),
-          xast.Stored,
-        )),
-        checks: [],
-        span: _,
-      )),
       ast.Column(ast.ColumnDef(
         name: "reading",
         data_type: xast.DtReal,
@@ -414,7 +386,7 @@ pub fn parse_many_parses_each_statement_in_order_test() {
   let assert Ok([
     ast.CreateStream(name: "s", ..),
     ast.AlterStream(name: "s", ..),
-  ]) = parse_many("CREATE STREAM s (a HLC); ALTER STREAM s DROP COLUMN a_note;")
+  ]) = parse_many("CREATE STREAM s (a INT); ALTER STREAM s DROP COLUMN a_note;")
 }
 
 pub fn parse_many_does_not_require_a_separating_semicolon_test() {
@@ -423,7 +395,7 @@ pub fn parse_many_does_not_require_a_separating_semicolon_test() {
   let assert Ok([
     ast.CreateStream(name: "s", ..),
     ast.AlterStream(name: "s", ..),
-  ]) = parse_many("CREATE STREAM s (a HLC) ALTER STREAM s DROP COLUMN a_note")
+  ]) = parse_many("CREATE STREAM s (a INT) ALTER STREAM s DROP COLUMN a_note")
 }
 
 pub fn parse_many_handles_a_semicolon_inside_a_string_literal_test() {
@@ -432,7 +404,7 @@ pub fn parse_many_handles_a_semicolon_inside_a_string_literal_test() {
   // expression must not be mistaken for a statement boundary.
   let assert Ok([ast.CreateStream(..), ast.AlterStream(..)]) =
     parse_many(
-      "CREATE STREAM s (a HLC, CONSTRAINT c CHECK (a != 'x;y'));
+      "CREATE STREAM s (a INT, CONSTRAINT c CHECK (a != 'x;y'));
        ALTER STREAM s DROP COLUMN a_note;",
     )
 }

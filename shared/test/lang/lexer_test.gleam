@@ -7,7 +7,7 @@ import lang/lexer.{
 import lang/token.{
   Amp, Arrow, ArrowText, Cast, Comma, Concat, ContainedBy, Contains, Dot, Eq, Ge,
   Hash, HashArrow, HashArrowText, Identifier, IntegerLiteral, Keyword, KwAnd,
-  KwCreate, KwHlc, Le, LeftParen, Lt, NeAngle, NeBang, NumericLiteral, Operator,
+  KwChar, KwCreate, Le, LeftParen, Lt, NeAngle, NeBang, NumericLiteral, Operator,
   Pipe, QuotedIdentifier, RegexMatchCi, RegexNoMatch, RegexNoMatchCi, RightParen,
   Semicolon, Shl, Shr, StringLiteral, Tilde,
 }
@@ -42,7 +42,7 @@ pub fn keyword_lexes_case_insensitively_test() {
 
 pub fn one_keyword_from_each_group_lexes_test() {
   // §3.1 data type, §3.2 value, §3.3 query structure, §3.4 expression.
-  assert kinds("HLC") == [Keyword(KwHlc)]
+  assert kinds("CHAR") == [Keyword(KwChar)]
   assert kinds("true") == [Keyword(token.KwTrue)]
   assert kinds("Alter") == [Keyword(token.KwAlter)]
   assert kinds("AND") == [Keyword(KwAnd)]

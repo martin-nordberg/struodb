@@ -24,8 +24,11 @@ pub type SemanticError {
   InsertUnknownColumn(column: String, span: Span)
   /// §11.4
   InsertGeneratedColumnInList(column: String, span: Span)
-  /// §11.2
-  InsertMissingHlcColumn(stream: String, span: Span)
+  /// An automatic system column (spec.md §9.2) appeared in an `INSERT`'s
+  /// column list — never legal, the same way a `GENERATED` column never
+  /// is, since its value is always supplied by the codegen layer itself,
+  /// never the client.
+  InsertSystemColumnInList(column: String, span: Span)
   /// §11.2/§11.3 — `NOT NULL` with no default and no explicit value.
   InsertMissingRequiredColumn(column: String, span: Span)
   InsertColumnCountMismatch(expected: Int, got: Int, row_index: Int, span: Span)
@@ -80,13 +83,9 @@ fn check_insert(
       }
       let column_list_errs =
         list.flat_map(columns, check_insert_column_list_entry(schema, _, span))
-      let hlc_missing_err = case list.contains(columns, schema.hlc_column) {
-        True -> []
-        False -> [InsertMissingHlcColumn(stream: stream_name, span: span)]
-      }
       let missing_required_err =
         list.flat_map(dict.to_list(schema.columns), fn(entry) {
-          check_insert_omitted_column(schema, columns, entry, span)
+          check_insert_omitted_column(columns, entry, span)
         })
       let expected = list.length(columns)
       let count_errs =
@@ -124,7 +123,6 @@ fn check_insert(
       list.flatten([
         list_empty_err,
         column_list_errs,
-        hlc_missing_err,
         missing_required_err,
         count_errs,
         ref_errs,
@@ -141,32 +139,33 @@ fn check_insert_column_list_entry(
   case dict.get(schema.columns, column_name) {
     Error(Nil) -> [InsertUnknownColumn(column: column_name, span: span)]
     Ok(col) ->
-      case col.generated {
-        None -> []
-        Some(_) -> [
-          InsertGeneratedColumnInList(column: column_name, span: span),
-        ]
+      case col.system {
+        True -> [InsertSystemColumnInList(column: column_name, span: span)]
+        False ->
+          case col.generated {
+            None -> []
+            Some(_) -> [
+              InsertGeneratedColumnInList(column: column_name, span: span),
+            ]
+          }
       }
   }
 }
 
 /// A column not in the `INSERT`'s own column list resolves the same way
 /// a bare `DEFAULT` value would (§11.2): its own `DEFAULT`/`GENERATED`
-/// clause, `NULL` if `OPTIONAL`, or an error if neither. The `HLC`
-/// column is excluded here — its own absence is `InsertMissingHlcColumn`
-/// above, not this — and so are `GENERATED` columns, which may never
-/// appear in the column list at all (checked separately, above).
+/// clause, `NULL` if `OPTIONAL`, or an error if neither. The 4 automatic
+/// system columns are excluded here, same as `GENERATED` columns — both
+/// may never appear in the column list at all (checked separately,
+/// above), so their absence is never an error.
 fn check_insert_omitted_column(
-  schema: catalog.StreamSchema,
   columns: List(String),
   entry: #(String, catalog.ColumnSchema),
   span: Span,
 ) -> List(SemanticError) {
   let #(name, col) = entry
   case
-    name == schema.hlc_column
-    || option.is_some(col.generated)
-    || list.contains(columns, name)
+    col.system || option.is_some(col.generated) || list.contains(columns, name)
   {
     True -> []
     False ->

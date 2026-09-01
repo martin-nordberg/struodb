@@ -14,7 +14,6 @@ pub type DataType {
   /// `DOUBLE PRECISION` — two keywords, one type; see the parser's
   /// `data_type` section for why this is special-cased there.
   DtDouble
-  DtHlc
   DtInt
   DtInteger
   DtInterval

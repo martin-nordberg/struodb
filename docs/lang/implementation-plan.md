@@ -47,7 +47,8 @@ paths and the single `Statement`/`SemanticError` types (now
   a stream's *current* declared shape (its columns, their types/
   nullability, its constraints) — §10 and §11's rules (widening-only type
   changes, drop-only-if-`OPTIONAL`, resolving an omitted column's value,
-  rejecting a second `HLC` column, etc.) all require knowing what a
+  rejecting a reserved `_STRUO_`-prefixed name, etc.) all require knowing
+  what a
   `CREATE STREAM` (and any prior `ALTER STREAM`s) already established.
   Rather than have the semantic module reach out to a live database or
   own any persistence itself, it takes a `Catalog` value in and returns an
@@ -63,8 +64,9 @@ paths and the single `Statement`/`SemanticError` types (now
   scanner where one malformed token or misplaced keyword usually makes
   the rest of the input unreliable to keep interpreting, so both stop and
   report one error. Most semantic checks on a single statement are
-  independent of each other, though (e.g. "no `HLC` column" and "`CHECK`
-  references an unknown column" don't block each other) — reporting all
+  independent of each other, though (e.g. a reserved `_STRUO_`-prefixed
+  name and "`CHECK` references an unknown column" don't block each
+  other) — reporting all
   of them in one pass is strictly more useful to a caller than fixing one
   error at a time through repeated runs, and costs little: every check
   below is a read-only walk of the already-built AST plus `Catalog`.
@@ -228,8 +230,6 @@ pub type Keyword {
   KwBoolean
   KwChar
   // ... one per §3.1 data type keyword ...
-  KwHlc
-  // ...
   KwFalse
   KwNull
   KwTrue
@@ -482,7 +482,6 @@ pub type DataType {
   DtDate
   DtDecimal(precision: Option(Int), scale: Option(Int))
   DtDouble          // `DOUBLE PRECISION`, two keywords, one type — see parser section
-  DtHlc
   DtInt
   DtInteger
   DtInterval
@@ -842,7 +841,7 @@ dispatches only within its own statement family (see the note under
 spec.md §9.1 gives a formal `data_type ::= ...` production directly —
 straightforward to parse from:
 
-- Bare keyword, no parameters: `BIGINT`, `BOOLEAN`, `DATE`, `HLC`, `INT`,
+- Bare keyword, no parameters: `BIGINT`, `BOOLEAN`, `DATE`, `INT`,
   `INTEGER`, `INTERVAL`, `JSON`, `JSONB`, `REAL`, `SMALLINT`, `TEXT`,
   `TIME`, `TIMESTAMP`, `TIMESTAMPTZ`, `UUID`.
 - `CHAR` / `VARCHAR`: keyword, then an *optional* `(n)`, `n >= 1` — bare
@@ -885,7 +884,6 @@ pub type StreamSchema {
   StreamSchema(
     name: String,
     columns: Dict(String, ColumnSchema),
-    hlc_column: String,               // name of the (exactly one) HLC column
     constraints: Dict(String, NamedCheck),
   )
 }
@@ -897,21 +895,28 @@ pub type ColumnSchema {
     optional: Bool,
     default: Option(Expr),
     generated: Option(GeneratedClause),
+    system: Bool,   // one of the 4 automatic system columns below, never
+                     // a `ddl_ast`-derived (user) column
   )
 }
 
 pub fn empty() -> Catalog
 
+/// The 4 automatic system columns (`_struo_hlc`/`_struo_hlc_timestamp`/
+/// `_struo_hlc_count`/`_struo_hlc_node_id`, spec.md §9.2) every stream
+/// gets, `system: True`, defined once here.
+pub fn system_columns() -> List(ColumnSchema)
+
 /// Callers (`ddl_semantics.gleam`) are expected to have already validated
 /// the `CreateStream` producing these arguments and to call this only
 /// once that has come back `Ok` — none of these six functions re-check
-/// anything (that `hlc_column` actually names one of `columns`, that
-/// names don't collide, that `stream` exists for the five below).
+/// anything (that names don't collide, that `stream` exists for the five
+/// below). Always joins `system_columns()` onto `columns`, so no caller
+/// needs to remember to add them.
 pub fn create_stream(
   catalog: Catalog,
   name: String,
   columns: List(ColumnSchema),
-  hlc_column: String,
   constraints: List(NamedCheck),
 ) -> Catalog
 
@@ -935,7 +940,7 @@ for instance) — it shouldn't only exist as a side effect of validation.
 `ddl_semantics.gleam` is where the translation from a validated
 `DdlStatement` into these six calls now happens (a private
 `apply_statement`/`apply_create_stream`/`apply_alter_action` there,
-reusing the same `column_defs`/`table_constraints`/`hlc_columns` helpers
+reusing the same `column_defs`/`table_constraints` helpers
 `check_create_stream` already builds for validation) — see its own
 section below.
 
@@ -1001,10 +1006,8 @@ copy actually needed to be there — see that module's own section below.
 ```gleam
 // schema/src/lang/ddl_semantics.gleam
 pub type SemanticError {
-  MissingHlcColumn(stream: String, span: Span)
-  MultipleHlcColumns(stream: String, first: String, second: String, span: Span)
-  HlcColumnOptional(column: String, span: Span)                 // §9.2
-  HlcColumnHasDefaultOrGenerated(column: String, span: Span)    // §9.2
+  ReservedIdentifier(name: String, span: Span)                  // §2, §9.2
+  SystemColumnNotModifiable(column: String, span: Span)         // §10.3/§10.4
   DefaultReferencesColumn(column: String, referenced: String, span: Span)  // §9.4
   UnknownColumnReference(referenced: String, span: Span)
   // Both `span` fields above are the offending `ColumnRef`'s own span,
@@ -1015,7 +1018,6 @@ pub type SemanticError {
   DuplicateConstraintName(stream: String, name: String, span: Span)
   UnknownStream(name: String, span: Span)
   AddColumnNeedsOptionalOrDefault(column: String, span: Span)   // §10.2
-  AddSecondHlcColumn(column: String, span: Span)                // §10.2
   DropNonOptionalColumn(column: String, span: Span)             // §10.3
   DropUnknownColumn(column: String, span: Span)
   NarrowingTypeChange(column: String, from: DataType, to: DataType, span: Span)  // §10.4
@@ -1034,7 +1036,7 @@ pub type SemanticError {
   InsertColumnListEmpty(span: Span)
   InsertUnknownColumn(column: String, span: Span)
   InsertGeneratedColumnInList(column: String, span: Span)       // §11.4
-  InsertMissingHlcColumn(stream: String, span: Span)            // §11.2
+  InsertSystemColumnInList(column: String, span: Span)          // §11.4
   InsertMissingRequiredColumn(column: String, span: Span)       // §11.2/§11.3, NOT NULL with no default
   InsertColumnCountMismatch(expected: Int, got: Int, row_index: Int, span: Span)
 }
@@ -1091,30 +1093,30 @@ fn postgres_name(identifier: String) -> String
    so two names that only collide after truncation still raise
    `DuplicateColumnName` — needed before any of the expression-reference
    checks below can run.
-2. Exactly one column typed `DtHlc` — `MissingHlcColumn` (0 found) or
-   `MultipleHlcColumns` (>1 found, naming the first two)  — §9.2.
-3. On the `HLC` column specifically: `optional == True` →
-   `HlcColumnOptional`; `default`/`generated` present →
-   `HlcColumnHasDefaultOrGenerated` — §9.2.
-4. Every column's `DEFAULT expr`, if present: walk the expr, collect
+2. The stream name and every column/constraint name: reject any starting
+   with `_STRUO_` (case-insensitive) as `ReservedIdentifier` — reserved
+   for the 4 automatic system columns and future system use — §2, §9.2.
+   (`HLC` is not a data type; `CREATE STREAM` never declares these
+   columns at all — `catalog.create_stream` adds them unconditionally.)
+3. Every column's `DEFAULT expr`, if present: walk the expr, collect
    every `ColumnRef(name, span)` found; any hit is
    `DefaultReferencesColumn(column: .., referenced: name, span: span)` —
    `span` is the `ColumnRef`'s own, so the error underlines the specific
    reference, not the whole `DEFAULT` clause (a `DEFAULT` expression
    cannot reference *any* column, sibling or otherwise, so finding any
    `ColumnRef` at all is the violation) — §9.4.
-5. Every column's `GENERATED ALWAYS AS (expr)`, every `CHECK (expr)`
+4. Every column's `GENERATED ALWAYS AS (expr)`, every `CHECK (expr)`
    (column-level or table-level): walk the expr, collect every
    `ColumnRef(name, span)`, and check each `name` against the symbol
    table from step 1 — a name not found is
    `UnknownColumnReference(referenced: name, span: span)`, again
    underlining the specific reference via its own `span`.
-6. Constraint names (`CONSTRAINT constraint_name`, column-level or
+5. Constraint names (`CONSTRAINT constraint_name`, column-level or
    table-level) unique within the stream, again compared via
    `postgres_name` — `DuplicateConstraintName`, per §9.5. (Step 1's
    `DuplicateColumnName` check is the column-name half of the same
    requirement, per §9.1.)
-7. `data_type` parameter sanity (`VARCHAR(n)`/`CHAR(n)`: `n >= 1`;
+6. `data_type` parameter sanity (`VARCHAR(n)`/`CHAR(n)`: `n >= 1`;
    `DECIMAL(p, s)`/`NUMERIC(p, s)`: `p >= 1`, `0 <= s <= p`) — per §9.1's
    `data_type` grammar.
 
@@ -1128,20 +1130,22 @@ and returning `Ok(new_catalog)`.
 0. The target stream must already exist in `catalog` — `UnknownStream`
    otherwise (and no further per-action checks run, since there is no
    schema to check them against).
-1. Per `AddColumn(column_def)`: same `DuplicateColumnName`/
-   `UnknownColumnReference`/parameter-sanity checks as `CREATE STREAM`
-   (run against the *union* of existing columns and this new one, so a
-   `CHECK` on the new column may reference an existing sibling). Must
-   have `optional == True`, or a `default`, or a `generated` clause —
-   `AddColumnNeedsOptionalOrDefault` otherwise — §10.2. `data_type ==
-   DtHlc` is always `AddSecondHlcColumn` — §10.2.
-2. Per `DropColumn(name)`: must exist (`DropUnknownColumn`) and must be
-   `optional == True` on the existing schema (`DropNonOptionalColumn`) —
-   §10.3.
+1. Per `AddColumn(column_def)`: same `ReservedIdentifier`/
+   `DuplicateColumnName`/`UnknownColumnReference`/parameter-sanity checks
+   as `CREATE STREAM` (run against the *union* of existing columns and
+   this new one, so a `CHECK` on the new column may reference an existing
+   sibling). Must have `optional == True`, or a `default`, or a
+   `generated` clause — `AddColumnNeedsOptionalOrDefault` otherwise —
+   §10.2.
+2. Per `DropColumn(name)`: must exist (`DropUnknownColumn`); one of the 4
+   automatic system columns (`ColumnSchema.system == True`) is
+   `SystemColumnNotModifiable`, checked ahead of and instead of the
+   `optional == True` check below (`DropNonOptionalColumn`) — §10.3.
 3. Per `AlterColumnType(name, new_type)`: must exist
    (reuse `DropUnknownColumn`'s shape or a dedicated variant — open
-   question, naming only); look up the existing `ColumnSchema`'s
-   `data_type` and classify the change:
+   question, naming only); a system column is `SystemColumnNotModifiable`,
+   same as `DropColumn` above; otherwise look up the existing
+   `ColumnSchema`'s `data_type` and classify the change:
    - Same type family, parameters only growing (`VARCHAR`/`CHAR` length
      up; `DECIMAL`/`NUMERIC` scale held or grown without shrinking
      `precision - scale`) → allowed.
@@ -1187,21 +1191,18 @@ order, and `Ok(new_catalog)`.
    successfully-parsed statement — kept for completeness, flagged as
    possibly-dead code once confirmed).
 2. Every name in the column list must exist on the target stream —
-   `InsertUnknownColumn` — and must **not** be a `GENERATED` column —
-   `InsertGeneratedColumnInList` — §11.4.
-3. The stream's `HLC` column must appear in the column list —
-   `InsertMissingHlcColumn` — §11.2 (it can never have a usable default,
-   so omitting it is always an error, never resolved to `NULL`/default
-   the way another omitted column might be).
-4. Every column *not* in the list, excluding the `HLC` column (already
-   covered by check 3) and `GENERATED` columns (which may never appear
-   in the list at all, per check 2): resolvable via its own `default`,
-   or `optional == True` (→ implicit `NULL`) — otherwise
+   `InsertUnknownColumn` — and must **not** be one of the 4 automatic
+   system columns (`ColumnSchema.system == True`) — `InsertSystemColumnInList`
+   — nor a `GENERATED` column — `InsertGeneratedColumnInList` — §11.4.
+3. Every column *not* in the list, excluding system columns and
+   `GENERATED` columns (neither may ever appear in the list at all, per
+   check 2 — their absence is never an error): resolvable via its own
+   `default`, or `optional == True` (→ implicit `NULL`) — otherwise
    `InsertMissingRequiredColumn` — §11.2/§11.3.
-5. Every `value_row` supplies exactly as many values as the column list
+4. Every `value_row` supplies exactly as many values as the column list
    has entries — `InsertColumnCountMismatch(expected, got, row_index)`
    for any row that doesn't.
-6. For each `value` that is `ValueExpr(expr)` (not the bare `DEFAULT`
+5. For each `value` that is `ValueExpr(expr)` (not the bare `DEFAULT`
    placeholder): walk `expr`, and every `ColumnRef` found is checked
    against the target stream's columns — `UnknownColumnReference`. (An
    `INSERT` expression referencing a column at all is unusual — there is
@@ -1345,8 +1346,9 @@ Built directly against `catalog.gleam`'s own primitives (`ColumnSchema`/
 `ddl_semantics` — `catalog.gleam` knows nothing about those, by design;
 see its own section above.
 
-- `create_stream` produces a `StreamSchema` with the right columns,
-  `hlc_column`, and `constraints`.
+- `create_stream` produces a `StreamSchema` with the right columns
+  (the 4 automatic `system_columns()` included, each `system: True`)
+  and `constraints`.
 - `add_column`/`drop_column`/`alter_column_type`/`add_constraint`/
   `drop_constraint` each updates the right part of an existing
   `StreamSchema` and leaves the rest unchanged.
@@ -1415,10 +1417,10 @@ directly, not via the parser, to keep these tests independent of parser
 correctness) that should trigger exactly that error — plus, in
 `ddl_semantics_test.gleam`:
 
-- A `CreateStream` with two independent violations (e.g. missing `HLC`
-  column *and* an unknown column reference in a `CHECK`) reports **both**
-  in one `Error(list)`, confirming diagnostics accumulate rather than
-  stopping at the first.
+- A `CreateStream` with two independent violations (e.g. a reserved
+  `_STRUO_`-prefixed column name *and* an unknown column reference in a
+  `CHECK`) reports **both** in one `Error(list)`, confirming diagnostics
+  accumulate rather than stopping at the first.
 - `postgres_name`: two columns with identical names round-trip to a
   collision as expected; two columns whose names are identical only in
   their first 63 bytes (differing after that) still raise
@@ -1442,8 +1444,9 @@ correctness) that should trigger exactly that error — plus, in
 
 `dml_semantics_test.gleam` adds:
 
-- An `INSERT` omitting the `HLC` column is `InsertMissingHlcColumn` even
-  when every other omitted column would otherwise resolve fine.
+- An `INSERT` naming a system column in its column list is
+  `InsertSystemColumnInList`, even when every other listed column
+  resolves fine.
 - Continuing past spec.md §10.7's `ALTER STREAM` example (built via
   `schema/ddl_parser` + `schema/ddl_semantics`, imported for exactly this
   purpose — see "Open questions" on what that dependency costs): spec.md

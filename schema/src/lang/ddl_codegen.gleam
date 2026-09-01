@@ -103,7 +103,8 @@ pub fn create_stream_to_sql(stmt: ast.DdlStatement) -> String {
   let assert ast.CreateStream(name:, elements:, span: _) = stmt
 
   let columns = column_defs(elements)
-  let column_lines = list.map(columns, column_def_to_sql)
+  let column_lines =
+    list.append(system_column_lines(), list.map(columns, column_def_to_sql))
   let check_lines =
     list.map(
       list.append(
@@ -122,6 +123,32 @@ pub fn create_stream_to_sql(stmt: ast.DdlStatement) -> String {
     |> string.join(",\n")
   }
   <> "\n);"
+}
+
+/// The 4 automatic system columns (catalog.gleam's `system_columns()`),
+/// rendered exactly once here — every stream gets these regardless of
+/// what `CREATE STREAM` itself declares (spec.md §9.2). `_STRUO_HLC`
+/// omits an explicit `NOT NULL` the same way a `PRIMARY KEY` column
+/// always has, below, since `PRIMARY KEY` already implies it.
+fn system_column_lines() -> List(String) {
+  [
+    expr_codegen.quote_identifier(catalog.hlc_column_name)
+      <> " "
+      <> expr_codegen.data_type_to_sql(xast.DtChar(Some(15)))
+      <> " PRIMARY KEY",
+    expr_codegen.quote_identifier(catalog.hlc_timestamp_column_name)
+      <> " "
+      <> expr_codegen.data_type_to_sql(xast.DtTimestamptz)
+      <> " NOT NULL",
+    expr_codegen.quote_identifier(catalog.hlc_count_column_name)
+      <> " "
+      <> expr_codegen.data_type_to_sql(xast.DtInteger)
+      <> " NOT NULL",
+    expr_codegen.quote_identifier(catalog.hlc_node_id_column_name)
+      <> " "
+      <> expr_codegen.data_type_to_sql(xast.DtInteger)
+      <> " NOT NULL",
+  ]
 }
 
 fn column_defs(elements: List(ast.StreamElement)) -> List(ast.ColumnDef) {
@@ -151,11 +178,10 @@ fn table_constraints(
 /// trailing `CONSTRAINT` line (`named_check_to_sql`), not inlined here —
 /// see `create_stream_to_sql`.
 fn column_def_to_sql(col: ast.ColumnDef) -> String {
-  let is_hlc = col.data_type == xast.DtHlc
   [
     expr_codegen.quote_identifier(col.name),
     expr_codegen.data_type_to_sql(col.data_type),
-    case !col.optional && option.is_none(col.generated) && !is_hlc {
+    case !col.optional && option.is_none(col.generated) {
       True -> "NOT NULL"
       False -> ""
     },
@@ -167,10 +193,6 @@ fn column_def_to_sql(col: ast.ColumnDef) -> String {
       Some(xast.GeneratedClause(expr, _storage)) ->
         "GENERATED ALWAYS AS (" <> expr_codegen.expr_to_sql(expr) <> ") STORED"
       None -> ""
-    },
-    case is_hlc {
-      True -> "PRIMARY KEY"
-      False -> ""
     },
   ]
   |> list.filter(fn(part) { part != "" })

@@ -7,9 +7,9 @@ import lang/expr_ast.{
   type BinaryOperator, type DataType, type Expr, type UnaryOperator, Add,
   Between, BinaryOp, BitAnd, BitNot, BitOr, BitXor, BoolLiteral, Cast, CmpEq,
   CmpGe, CmpGt, CmpLe, CmpLt, CmpNeAngle, CmpNeBang, ColumnRef, ConcatOp, Div,
-  DtBigint, DtBoolean, DtChar, DtDate, DtDecimal, DtDouble, DtHlc, DtInt,
-  DtInteger, DtInterval, DtJson, DtJsonb, DtNumeric, DtReal, DtSmallint, DtText,
-  DtTime, DtTimestamp, DtTimestamptz, DtUuid, DtVarchar, FunctionCall, InList,
+  DtBigint, DtBoolean, DtChar, DtDate, DtDecimal, DtDouble, DtInt, DtInteger,
+  DtInterval, DtJson, DtJsonb, DtNumeric, DtReal, DtSmallint, DtText, DtTime,
+  DtTimestamp, DtTimestamptz, DtUuid, DtVarchar, FunctionCall, InList,
   IntLiteral, IsBool, IsDistinctFrom, IsNull, JsonContainedBy, JsonContains,
   JsonGet, JsonGetPath, JsonGetPathText, JsonGetText, Like, LogicalAnd,
   LogicalNot, LogicalOr, Mod, Mul, Neg, NullLiteral, NumericLiteral, Pos, Pow,
@@ -106,11 +106,6 @@ pub fn data_type_to_sql(data_type: DataType) -> String {
     DtDecimal(precision, scale) ->
       "DECIMAL" <> optional_precision_scale_sql(precision, scale)
     DtDouble -> "DOUBLE PRECISION"
-    // The HLC column's own `PRIMARY KEY`/no-`NOT NULL` rendering is a
-    // column-level decision (ddl_codegen.gleam), not a data_type one —
-    // this is only the bare type spelling. See "The HLC column
-    // transpiles to CHAR(15)..." in docs/lang/codegen-plan.md.
-    DtHlc -> "CHAR(15)"
     DtInt -> "INTEGER"
     DtInteger -> "INTEGER"
     DtInterval -> "INTERVAL"

@@ -17,7 +17,9 @@ fn dummy_span() -> token.Span {
 /// ddl_ast/ddl_semantics (schema/) — catalog.gleam knows nothing about
 /// those, by design; see the note on `Catalog` in catalog.gleam. This
 /// keeps these tests independent of both parser and DDL-semantics
-/// correctness.
+/// correctness. Always a user-declared (non-`system`) column — every
+/// `ddl_ast`-derived column is, by construction; see `to_column_schema`
+/// in ddl_semantics.gleam.
 fn column(name: String, data_type: xast.DataType) -> catalog.ColumnSchema {
   catalog.ColumnSchema(
     name: name,
@@ -25,6 +27,7 @@ fn column(name: String, data_type: xast.DataType) -> catalog.ColumnSchema {
     optional: False,
     default: None,
     generated: None,
+    system: False,
   )
 }
 
@@ -32,16 +35,20 @@ fn named_check(name: String, expr: xast.Expr) -> xast.NamedCheck {
   xast.NamedCheck(name, expr, dummy_span())
 }
 
+/// The 4 system-column names, sorted the same way `sorted_keys` below
+/// sorts everything else — used as a fixed prefix every `sorted_keys`
+/// assertion below expects, since `create_stream` adds them to every
+/// stream regardless of what it's asked to declare.
+const system_column_names = [
+  catalog.hlc_column_name, catalog.hlc_count_column_name,
+  catalog.hlc_node_id_column_name, catalog.hlc_timestamp_column_name,
+]
+
 fn base_catalog() -> catalog.Catalog {
   catalog.create_stream(
     catalog.empty(),
     "sensor_reading",
-    [
-      column("reading_hlc", xast.DtHlc),
-      column("reading", xast.DtReal),
-      column("units", xast.DtVarchar(Some(32))),
-    ],
-    "reading_hlc",
+    [column("reading", xast.DtReal), column("units", xast.DtVarchar(Some(32)))],
     [
       named_check(
         "reading_in_range",
@@ -74,8 +81,8 @@ fn sorted_keys(d: dict.Dict(String, a)) -> List(String) {
 pub fn create_stream_produces_the_right_schema_test() {
   let assert Ok(schema) = dict.get(base_catalog().streams, "sensor_reading")
   assert schema.name == "sensor_reading"
-  assert schema.hlc_column == "reading_hlc"
-  assert sorted_keys(schema.columns) == ["reading", "reading_hlc", "units"]
+  assert sorted_keys(schema.columns)
+    == list.append(system_column_names, ["reading", "units"])
   assert sorted_keys(schema.constraints)
     == [
       "reading_in_range",
@@ -85,9 +92,34 @@ pub fn create_stream_produces_the_right_schema_test() {
   let assert Ok(reading) = dict.get(schema.columns, "reading")
   assert reading.data_type == xast.DtReal
   assert reading.optional == False
+  assert reading.system == False
+}
 
-  let assert Ok(hlc) = dict.get(schema.columns, "reading_hlc")
-  assert hlc.data_type == xast.DtHlc
+/// The 4 fixed system columns (catalog.gleam's own `system_columns()`)
+/// are joined onto every stream automatically — `create_stream` never
+/// needs to be told about them, and there's no way to opt out.
+pub fn create_stream_always_adds_the_4_system_columns_test() {
+  let assert Ok(schema) = dict.get(base_catalog().streams, "sensor_reading")
+
+  let assert Ok(hlc) = dict.get(schema.columns, catalog.hlc_column_name)
+  assert hlc.data_type == xast.DtChar(Some(15))
+  assert hlc.optional == False
+  assert hlc.system == True
+
+  let assert Ok(hlc_timestamp) =
+    dict.get(schema.columns, catalog.hlc_timestamp_column_name)
+  assert hlc_timestamp.data_type == xast.DtTimestamptz
+  assert hlc_timestamp.system == True
+
+  let assert Ok(hlc_count) =
+    dict.get(schema.columns, catalog.hlc_count_column_name)
+  assert hlc_count.data_type == xast.DtInteger
+  assert hlc_count.system == True
+
+  let assert Ok(hlc_node_id) =
+    dict.get(schema.columns, catalog.hlc_node_id_column_name)
+  assert hlc_node_id.data_type == xast.DtInteger
+  assert hlc_node_id.system == True
 }
 
 //-----------------------------------------------------------------------------
@@ -103,6 +135,7 @@ pub fn add_column_adds_a_new_column_and_leaves_the_rest_unchanged_test() {
       optional: True,
       default: None,
       generated: None,
+      system: False,
     )
   let updated =
     catalog.add_column(base_catalog(), "sensor_reading", notes_column)
@@ -110,8 +143,8 @@ pub fn add_column_adds_a_new_column_and_leaves_the_rest_unchanged_test() {
 
   let assert Ok(notes) = dict.get(schema.columns, "notes")
   assert notes.optional == True
-  assert dict.size(schema.columns) == 4
-  assert schema.hlc_column == "reading_hlc"
+  // 2 original user columns + "notes" + 4 system columns.
+  assert dict.size(schema.columns) == 7
   assert dict.size(schema.constraints) == 2
 }
 
@@ -120,7 +153,8 @@ pub fn drop_column_removes_only_that_column_test() {
   let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
 
   assert dict.has_key(schema.columns, "units") == False
-  assert sorted_keys(schema.columns) == ["reading", "reading_hlc"]
+  assert sorted_keys(schema.columns)
+    == list.append(system_column_names, ["reading"])
   assert dict.size(schema.constraints) == 2
 }
 
@@ -151,7 +185,8 @@ pub fn add_constraint_adds_a_new_constraint_test() {
       "units_at_most_64",
       "units_not_empty",
     ]
-  assert dict.size(schema.columns) == 3
+  // 2 user columns + 4 system columns, untouched by this action.
+  assert dict.size(schema.columns) == 6
 }
 
 pub fn drop_constraint_removes_only_that_constraint_test() {
@@ -164,7 +199,7 @@ pub fn drop_constraint_removes_only_that_constraint_test() {
   let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
 
   assert sorted_keys(schema.constraints) == ["units_not_empty"]
-  assert dict.size(schema.columns) == 3
+  assert dict.size(schema.columns) == 6
 }
 
 pub fn multiple_actions_in_sequence_all_apply_test() {
@@ -174,7 +209,8 @@ pub fn multiple_actions_in_sequence_all_apply_test() {
     |> catalog.drop_constraint("sensor_reading", "units_not_empty")
   let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
 
-  assert sorted_keys(schema.columns) == ["reading", "reading_hlc"]
+  assert sorted_keys(schema.columns)
+    == list.append(system_column_names, ["reading"])
   assert sorted_keys(schema.constraints) == ["reading_in_range"]
 }
 //-----------------------------------------------------------------------------

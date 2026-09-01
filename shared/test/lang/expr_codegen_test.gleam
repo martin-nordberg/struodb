@@ -62,7 +62,6 @@ pub fn bare_data_types_map_directly_test() {
   assert expr_codegen.data_type_to_sql(xast.DtBoolean) == "BOOLEAN"
   assert expr_codegen.data_type_to_sql(xast.DtDate) == "DATE"
   assert expr_codegen.data_type_to_sql(xast.DtDouble) == "DOUBLE PRECISION"
-  assert expr_codegen.data_type_to_sql(xast.DtHlc) == "CHAR(15)"
   assert expr_codegen.data_type_to_sql(xast.DtInt) == "INTEGER"
   assert expr_codegen.data_type_to_sql(xast.DtInteger) == "INTEGER"
   assert expr_codegen.data_type_to_sql(xast.DtInterval) == "INTERVAL"

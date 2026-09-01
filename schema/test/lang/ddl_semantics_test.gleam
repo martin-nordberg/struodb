@@ -61,12 +61,13 @@ fn parse_source(source: String) -> ast.DdlStatement {
   stmt
 }
 
-/// `s`: `id HLC`, `a INT`, `name VARCHAR(64)` (both `a` and `name`
-/// `NOT NULL`, no default), `computed INT GENERATED ALWAYS AS (1)
-/// STORED`, and a table-level `CONSTRAINT a_positive CHECK (a > 0)`.
+/// `s`: `a INT`, `name VARCHAR(64)` (both `NOT NULL`, no default),
+/// `computed INT GENERATED ALWAYS AS (1) STORED`, and a table-level
+/// `CONSTRAINT a_positive CHECK (a > 0)` — plus the 4 automatic system
+/// columns every stream gets (`catalog.create_stream`), not declared
+/// here at all.
 fn base_stream_create() -> ast.DdlStatement {
   create_stream("s", [
-    ast.Column(column("id", xast.DtHlc)),
     ast.Column(column("a", xast.DtInt)),
     ast.Column(column("name", xast.DtVarchar(Some(64)))),
     ast.Column(ast.ColumnDef(
@@ -99,76 +100,56 @@ fn base_catalog() -> catalog.Catalog {
 // CREATE STREAM — one test per SemanticError variant it can raise
 //-----------------------------------------------------------------------------
 
-pub fn missing_hlc_column_test() {
-  let stmt = create_stream("s", [ast.Column(column("a", xast.DtInt))])
-  let assert Error([ddl_semantics.MissingHlcColumn(stream: "s", span: _)]) =
-    ddl_semantics.analyze(catalog.empty(), stmt)
-}
-
-pub fn multiple_hlc_columns_test() {
-  let stmt =
-    create_stream("s", [
-      ast.Column(column("a", xast.DtHlc)),
-      ast.Column(column("b", xast.DtHlc)),
-    ])
+pub fn reserved_stream_name_test() {
+  let stmt = create_stream("_STRUO_evil", [ast.Column(column("a", xast.DtInt))])
   let assert Error([
-    ddl_semantics.MultipleHlcColumns(
-      stream: "s",
-      first: "a",
-      second: "b",
-      span: _,
-    ),
+    ddl_semantics.ReservedIdentifier(name: "_STRUO_evil", span: _),
   ]) = ddl_semantics.analyze(catalog.empty(), stmt)
 }
 
-pub fn hlc_column_optional_test() {
-  let stmt =
-    create_stream("s", [
-      ast.Column(ast.ColumnDef(..column("a", xast.DtHlc), optional: True)),
-    ])
-  let assert Error([ddl_semantics.HlcColumnOptional(column: "a", span: _)]) =
-    ddl_semantics.analyze(catalog.empty(), stmt)
+pub fn reserved_column_name_test() {
+  // Lower-case `_struo_` — the check is case-insensitive.
+  let stmt = create_stream("s", [ast.Column(column("_struo_col", xast.DtInt))])
+  let assert Error([
+    ddl_semantics.ReservedIdentifier(name: "_struo_col", span: _),
+  ]) = ddl_semantics.analyze(catalog.empty(), stmt)
 }
 
-pub fn hlc_column_has_default_or_generated_test() {
+pub fn reserved_constraint_name_test() {
   let stmt =
     create_stream("s", [
-      ast.Column(
-        ast.ColumnDef(
-          ..column("a", xast.DtHlc),
-          default: Some(xast.StringLiteral("x")),
+      ast.Column(column("a", xast.DtInt)),
+      ast.TableConstraint(
+        check: xast.NamedCheck(
+          "_STRUO_check",
+          xast.BoolLiteral(True),
+          dummy_span(),
         ),
+        span: dummy_span(),
       ),
     ])
   let assert Error([
-    ddl_semantics.HlcColumnHasDefaultOrGenerated(column: "a", span: _),
+    ddl_semantics.ReservedIdentifier(name: "_STRUO_check", span: _),
   ]) = ddl_semantics.analyze(catalog.empty(), stmt)
 }
 
 pub fn default_references_column_test() {
   let stmt =
     create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
+      ast.Column(column("a", xast.DtInt)),
       ast.Column(
-        ast.ColumnDef(..column("b", xast.DtInt), default: Some(col_ref("id"))),
+        ast.ColumnDef(..column("b", xast.DtInt), default: Some(col_ref("a"))),
       ),
     ])
   let assert Error([
-    ddl_semantics.DefaultReferencesColumn(
-      column: "b",
-      referenced: "id",
-      span: _,
-    ),
+    ddl_semantics.DefaultReferencesColumn(column: "b", referenced: "a", span: _),
   ]) = ddl_semantics.analyze(catalog.empty(), stmt)
 }
 
 pub fn unknown_column_reference_test() {
   let check = xast.NamedCheck("c1", col_ref("nonexistent"), dummy_span())
   let stmt =
-    create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
-      ast.TableConstraint(check: check, span: dummy_span()),
-    ])
+    create_stream("s", [ast.TableConstraint(check: check, span: dummy_span())])
   let assert Error([
     ddl_semantics.UnknownColumnReference(referenced: "nonexistent", span: _),
   ]) = ddl_semantics.analyze(catalog.empty(), stmt)
@@ -177,7 +158,6 @@ pub fn unknown_column_reference_test() {
 pub fn duplicate_column_name_test() {
   let stmt =
     create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
       ast.Column(column("a", xast.DtInt)),
       ast.Column(column("a", xast.DtInt)),
     ])
@@ -191,7 +171,6 @@ pub fn duplicate_constraint_name_test() {
   let check2 = xast.NamedCheck("c1", xast.BoolLiteral(True), dummy_span())
   let stmt =
     create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
       ast.TableConstraint(check: check1, span: dummy_span()),
       ast.TableConstraint(check: check2, span: dummy_span()),
     ])
@@ -202,10 +181,7 @@ pub fn duplicate_constraint_name_test() {
 
 pub fn invalid_data_type_parameter_test() {
   let stmt =
-    create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
-      ast.Column(column("x", xast.DtVarchar(Some(0)))),
-    ])
+    create_stream("s", [ast.Column(column("x", xast.DtVarchar(Some(0))))])
   let assert Error([
     ddl_semantics.InvalidDataTypeParameter(column: "x", span: _, reason: _),
   ]) = ddl_semantics.analyze(catalog.empty(), stmt)
@@ -214,7 +190,7 @@ pub fn invalid_data_type_parameter_test() {
 pub fn a_statement_with_two_independent_violations_reports_both_test() {
   let stmt =
     create_stream("bad", [
-      ast.Column(column("a", xast.DtInt)),
+      ast.Column(column("_STRUO_bad", xast.DtInt)),
       ast.TableConstraint(
         check: xast.NamedCheck("c", col_ref("nope"), dummy_span()),
         span: dummy_span(),
@@ -224,7 +200,7 @@ pub fn a_statement_with_two_independent_violations_reports_both_test() {
   assert list.length(errors) == 2
   assert list.contains(
     errors,
-    ddl_semantics.MissingHlcColumn(stream: "bad", span: dummy_span()),
+    ddl_semantics.ReservedIdentifier(name: "_STRUO_bad", span: dummy_span()),
   )
   assert list.contains(
     errors,
@@ -254,7 +230,6 @@ pub fn unknown_column_reference_span_is_the_column_refs_own_span_test() {
     )
   let stmt =
     create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
       ast.Column(column("a", xast.DtBoolean)),
       ast.TableConstraint(check: check, span: dummy_span()),
     ])
@@ -277,7 +252,6 @@ pub fn names_colliding_only_after_63_bytes_are_a_duplicate_test() {
   let prefix = string.repeat("a", 63)
   let stmt =
     create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
       ast.Column(column(prefix <> "x", xast.DtInt)),
       ast.Column(column(prefix <> "y", xast.DtInt)),
     ])
@@ -293,7 +267,6 @@ pub fn names_colliding_only_after_63_bytes_are_a_duplicate_test() {
 pub fn names_differing_well_within_63_bytes_do_not_collide_test() {
   let stmt =
     create_stream("s", [
-      ast.Column(column("id", xast.DtHlc)),
       ast.Column(column("alpha", xast.DtInt)),
       ast.Column(column("beta", xast.DtInt)),
     ])
@@ -319,16 +292,55 @@ pub fn add_column_needs_optional_or_default_test() {
   ]) = ddl_semantics.analyze(base_catalog(), stmt)
 }
 
-pub fn add_second_hlc_column_test() {
+pub fn reserved_add_column_name_test() {
   let stmt =
     alter_stream("s", [
       ast.AddColumn(
-        ast.ColumnDef(..column("b2", xast.DtHlc), optional: True),
+        ast.ColumnDef(..column("_STRUO_new", xast.DtInt), optional: True),
         dummy_span(),
       ),
     ])
-  let assert Error([ddl_semantics.AddSecondHlcColumn(column: "b2", span: _)]) =
-    ddl_semantics.analyze(base_catalog(), stmt)
+  let assert Error([
+    ddl_semantics.ReservedIdentifier(name: "_STRUO_new", span: _),
+  ]) = ddl_semantics.analyze(base_catalog(), stmt)
+}
+
+pub fn reserved_add_constraint_name_test() {
+  let stmt =
+    alter_stream("s", [
+      ast.AddConstraint(xast.NamedCheck(
+        "_STRUO_check2",
+        xast.BoolLiteral(True),
+        dummy_span(),
+      )),
+    ])
+  let assert Error([
+    ddl_semantics.ReservedIdentifier(name: "_STRUO_check2", span: _),
+  ]) = ddl_semantics.analyze(base_catalog(), stmt)
+}
+
+pub fn system_column_not_modifiable_on_drop_column_test() {
+  let stmt =
+    alter_stream("s", [
+      ast.DropColumn(column_name: catalog.hlc_column_name, span: dummy_span()),
+    ])
+  let assert Error([
+    ddl_semantics.SystemColumnNotModifiable(column: "_struo_hlc", span: _),
+  ]) = ddl_semantics.analyze(base_catalog(), stmt)
+}
+
+pub fn system_column_not_modifiable_on_alter_column_type_test() {
+  let stmt =
+    alter_stream("s", [
+      ast.AlterColumnType(
+        column_name: catalog.hlc_column_name,
+        data_type: xast.DtInt,
+        span: dummy_span(),
+      ),
+    ])
+  let assert Error([
+    ddl_semantics.SystemColumnNotModifiable(column: "_struo_hlc", span: _),
+  ]) = ddl_semantics.analyze(base_catalog(), stmt)
 }
 
 pub fn drop_non_optional_column_test() {
@@ -438,8 +450,6 @@ pub fn drop_then_add_constraint_under_the_same_name_replaces_it_test() {
 
 const create_stream_example = "
   CREATE STREAM sensor_reading (
-    reading_hlc HLC,
-    reading_time TIMESTAMPTZ GENERATED ALWAYS AS (TIMESTAMPTZ_FROM_HLC(reading_hlc)) STORED,
     reading REAL CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100),
     units VARCHAR(32),
     sensor_id VARCHAR(24),
@@ -459,8 +469,10 @@ pub fn create_stream_example_analyzes_clean_test() {
   let assert Ok(cat) =
     ddl_semantics.analyze(catalog.empty(), parse_source(create_stream_example))
   let assert Ok(schema) = dict.get(cat.streams, "sensor_reading")
-  assert schema.hlc_column == "reading_hlc"
-  assert dict.size(schema.columns) == 6
+  // The 4 user columns (reading, units, sensor_id, notes) plus the 4
+  // automatic system columns every stream gets.
+  assert dict.size(schema.columns) == 8
+  assert dict.has_key(schema.columns, catalog.hlc_column_name)
   assert dict.size(schema.constraints) == 1
 }
 
