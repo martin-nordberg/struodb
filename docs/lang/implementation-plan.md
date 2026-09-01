@@ -133,6 +133,9 @@ src/lang/                            shared/src/lang/
                                                            # module — a later cleanup pulled it out)
   catalog.gleam                        catalog.gleam     # briefly lived in schema/, moved back —
                                                            # see its own section below
+                                        expr_semantics.gleam # collect_column_refs/check_expr_column_refs —
+                                                           # briefly two copies, one per
+                                                           # *_semantics.gleam below; see their section
   semantic.gleam (CREATE/ALTER half) schema/src/lang/
                                         ddl_ast.gleam      # Statement/StreamElement/etc. half of ast.gleam,
                                                            # renamed DdlStatement
@@ -143,10 +146,7 @@ src/lang/                            shared/src/lang/
                                                            # renamed DmlStatement
                                         dml_parser.gleam  # INSERT half of parser.gleam
                                         dml_semantics.gleam # INSERT half of semantic.gleam — its own
-                                                           # scoped SemanticError, but its
-                                                           # collect_column_refs/check_expr_column_refs
-                                                           # are still a copy of ddl_semantics.gleam's,
-                                                           # not a shared helper; see "Open questions"
+                                                           # scoped SemanticError
 
 test/lang/                           shared/test/lang/
   token_test.gleam                     token_test.gleam   # still unbuilt, see below
@@ -154,6 +154,7 @@ test/lang/                           shared/test/lang/
   ast_test.gleam                       (none — no free-standing helper constructors to test)
   parser_test.gleam                    expr_parser_test.gleam # expect_*/data_type only — see below
                                         token_stream_test.gleam
+                                        expr_semantics_test.gleam
   catalog_test.gleam                   catalog_test.gleam # briefly lived in schema/test/lang/, moved back
                                       schema/test/lang/
   semantic_test.gleam (CREATE/ALTER)   ddl_semantics_test.gleam
@@ -891,6 +892,47 @@ section below.
 
 ---
 
+## `shared/src/lang/expr_semantics.gleam`
+
+Not in the original plan as a module of its own — as first built (once
+the package split landed), `ddl_semantics.gleam` and `dml_semantics.
+gleam` below each kept their own verbatim copy of these two functions,
+since each needed `List(SemanticError)` back and the two packages'
+`SemanticError` types are distinct. A review noticed the recursive half
+(`collect_column_refs`) doesn't touch `SemanticError` at all, and the
+thin wrapper around it (`check_expr_column_refs`) only needs the *error
+constructor*, not a fixed error type — so both moved here, generic over
+that one parameter:
+
+```gleam
+/// Every `ColumnRef` reachable inside `expr`, with its own span — the
+/// only kind of subexpression either caller's checks ever need to blame
+/// individually; see the note on `Expr` in expr_ast.gleam.
+pub fn collect_column_refs(expr: Expr) -> List(#(String, Span))
+
+/// Every `ColumnRef` inside `expr` not found in `valid_names`, each
+/// reported via `unknown_column_reference` — a caller-supplied
+/// constructor rather than a fixed error type, so this stays usable by
+/// both `ddl_semantics.gleam`'s and `dml_semantics.gleam`'s own
+/// `SemanticError`.
+pub fn check_expr_column_refs(
+  expr: Expr,
+  valid_names: List(String),
+  unknown_column_reference: fn(String, Span) -> e,
+) -> List(e)
+```
+
+A caller passes its own `UnknownColumnReference` variant's constructor
+directly — `check_expr_column_refs(expr, valid_names,
+UnknownColumnReference)` — since a two-argument record constructor is
+already exactly `fn(String, Span) -> SemanticError` in that package.
+Nothing else in either `*_semantics.gleam` module moved here:
+`postgres_name`/`find_duplicates` (below) exist only in
+`ddl_semantics.gleam`, since only its checks have a name-uniqueness rule
+to apply them to.
+
+---
+
 ## `schema/src/lang/ddl_semantics.gleam`, `streams/src/lang/dml_semantics.gleam`
 
 As planned, one `semantic.gleam` held one `SemanticError` type covering
@@ -901,11 +943,11 @@ out (once the package split landed) as a full copy of `ddl_semantics.
 gleam`'s, all sixteen `CREATE`/`ALTER`-only variants included though none
 of them were ever constructed by `dml_semantics`' `check_insert` — a
 review pruned that copy down to just the eight variants below.
-`collect_column_refs`/`check_expr_column_refs` (the `Expr`-walking
-helpers immediately below the two `SemanticError` types), by contrast,
-are still copy-pasted verbatim into both modules — that half is flagged
-as a remaining simplification opportunity in "Open questions" below, not
-something this plan resolves.
+`collect_column_refs`/`check_expr_column_refs`, the `Expr`-walking
+helpers both modules' checks are built on, went through the same
+history: copy-pasted verbatim into both at first, then moved into
+`shared/src/lang/expr_semantics.gleam` once a review noticed neither
+copy actually needed to be there — see that module's own section below.
 
 ```gleam
 // schema/src/lang/ddl_semantics.gleam
@@ -1187,6 +1229,27 @@ wraps the same `expr` grammar differently — a `CREATE STREAM ... CHECK
 statement families' actual entry points into `expr_parser` get covered,
 at the cost of the same expression-level assertions appearing twice).
 
+### `shared/test/lang/expr_semantics_test.gleam`
+
+Same reasoning as `expr_parser_test.gleam` above: `expr_semantics.gleam`
+is logic living in `shared/`, so `shared`'s own `gleam test` needs to be
+able to catch a regression in it directly, not only via whichever of
+`ddl_semantics_test.gleam`/`dml_semantics_test.gleam` happens to exercise
+the broken case. Exercised against a throwaway local error type, not
+either package's real `SemanticError`, specifically to prove
+`check_expr_column_refs` is genuinely generic and not accidentally
+coupled to one:
+
+- `collect_column_refs`: a bare literal has none; a bare `ColumnRef` is
+  itself; every `ColumnRef` nested anywhere across several unrelated
+  `Expr` constructors (unary, binary, cast, function call) is found, not
+  just the ones a narrower test would happen to cover; a repeated
+  reference is reported once per occurrence, not deduplicated.
+- `check_expr_column_refs`: every reference valid → no errors; an
+  unknown reference → reported via the caller's own constructor; several
+  references, only some unknown → only those are reported; no references
+  at all → never flagged.
+
 ### `shared/test/lang/lexer_test.gleam`
 
 - One keyword from each of §3.1–§3.4 tokenizes to its `Keyword` variant,
@@ -1363,11 +1426,11 @@ decoupled it from `ddl_ast` (see its own section above); `semantic.gleam`
 split into `ddl_semantics.gleam` (schema) + `dml_semantics.gleam`
 (streams — depending only on `shared` in production code once
 `catalog.gleam` moved back; `schema` is now a `dev_dependencies`-only
-dependency, for one test that builds a `Catalog` via real DDL parsing).
-See "Module layout" above for the resulting layout and "Open questions"
-below for what's still unresolved (the `collect_column_refs`/
-`check_expr_column_refs` helper duplication between the two
-`*_semantics.gleam` modules).
+dependency, for one test that builds a `Catalog` via real DDL parsing),
+with their shared `collect_column_refs`/`check_expr_column_refs` moved
+out into `expr_semantics.gleam` (shared) once a review noticed both
+copies could be one generic function (see its own section above). See
+"Module layout" above for the resulting layout.
 
 ---
 
@@ -1447,25 +1510,19 @@ here — see that list directly) plus what this planning pass surfaced:
   (§10.5) is unimplemented here entirely, pending spec.md's own
   unresolved decision on the verification mechanism (see spec.md's
   "Remaining open details" for the options under consideration).
-- **`ddl_semantics.gleam`/`dml_semantics.gleam`'s duplicated
-  `collect_column_refs`/`check_expr_column_refs`** (surfaced by review
-  once the package split landed — see "Module layout" and the
-  `*_semantics.gleam` section above) are copy-pasted verbatim into both
-  modules. (`SemanticError` itself was the same story until a review
+- ~~`ddl_semantics.gleam`/`dml_semantics.gleam`'s duplicated
+  `collect_column_refs`/`check_expr_column_refs`~~ — **resolved**:
+  (`SemanticError` itself was the same story until an earlier review
   pruned `dml_semantics`'s copy down to only the eight variants
-  `check_insert` actually raises — see the `*_semantics.gleam` section
-  above — so this item is narrower than it originally was.) Options, in
-  increasing order of how much they change: (a) leave it — the
-  duplication is currently harmless, just a sync hazard if a shared rule
-  (e.g. how `UnknownColumnReference` walks `IsDistinctFrom`) ever changes
-  in one copy and not the other; (b) move `collect_column_refs`/
-  `check_expr_column_refs` (pure `Expr`-only traversal, no `Catalog`/AST
-  dependency) into `shared/src/lang/expr_ast.gleam` or a new
-  `shared/src/lang/expr_semantics.gleam`, so that half stops being
-  copy-pasted too — this would need `check_expr_column_refs` to take an
-  error-constructing function as a parameter, since each package's own
-  `UnknownColumnReference` is a variant of its own distinct
-  `SemanticError` type. Not resolved here.
+  `check_insert` actually raises.) Both functions moved to
+  `shared/src/lang/expr_semantics.gleam` — `collect_column_refs` as-is
+  (it never touched `SemanticError`), `check_expr_column_refs` made
+  generic over the error type via a caller-supplied constructor parameter
+  (`fn(String, Span) -> e`), since each package's `UnknownColumnReference`
+  is a variant of its own distinct `SemanticError`. Each caller passes
+  its own variant's constructor directly:
+  `check_expr_column_refs(expr, valid_names, UnknownColumnReference)`.
+  See `expr_semantics.gleam`'s own section above.
 - ~~`streams` depends on the whole `schema` package just to reach
   `catalog.gleam`~~ — **resolved**: `catalog.gleam`'s `apply_statement`
   used to operate directly on `ddl_ast`'s `DdlStatement`/`StreamElement`/

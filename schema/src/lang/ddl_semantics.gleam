@@ -6,6 +6,7 @@ import gleam/string
 import lang/catalog.{type Catalog}
 import lang/ddl_ast as ast
 import lang/expr_ast as xast
+import lang/expr_semantics
 import lang/token.{type Span}
 
 //-----------------------------------------------------------------------------
@@ -191,11 +192,20 @@ fn check_create_stream(
     list.flat_map(cols, fn(c) {
       case c.generated {
         None -> []
-        Some(g) -> check_expr_column_refs(g.expr, valid_names)
+        Some(g) ->
+          expr_semantics.check_expr_column_refs(
+            g.expr,
+            valid_names,
+            UnknownColumnReference,
+          )
       }
     }),
     list.flat_map(all_checks, fn(check) {
-      check_expr_column_refs(check.expr, valid_names)
+      expr_semantics.check_expr_column_refs(
+        check.expr,
+        valid_names,
+        UnknownColumnReference,
+      )
     }),
     // 6. Constraint names unique within the stream (column-level and
     // table-level together), same `postgres_name` comparison as (1).
@@ -280,7 +290,7 @@ fn check_default_has_no_column_refs(col: ast.ColumnDef) -> List(SemanticError) {
   case col.default {
     None -> []
     Some(expr) ->
-      list.map(collect_column_refs(expr), fn(ref) {
+      list.map(expr_semantics.collect_column_refs(expr), fn(ref) {
         let #(name, span) = ref
         DefaultReferencesColumn(column: col.name, referenced: name, span: span)
       })
@@ -446,11 +456,20 @@ fn check_add_column(
   }
   let generated_err = case col.generated {
     None -> []
-    Some(g) -> check_expr_column_refs(g.expr, valid_names)
+    Some(g) ->
+      expr_semantics.check_expr_column_refs(
+        g.expr,
+        valid_names,
+        UnknownColumnReference,
+      )
   }
   let check_err =
     list.flat_map(col.checks, fn(c) {
-      check_expr_column_refs(c.expr, valid_names)
+      expr_semantics.check_expr_column_refs(
+        c.expr,
+        valid_names,
+        UnknownColumnReference,
+      )
     })
   let needs_default_err = case
     col.optional || option.is_some(col.default) || option.is_some(col.generated)
@@ -638,7 +657,11 @@ fn check_add_constraint(
   }
   list.append(
     duplicate_err,
-    check_expr_column_refs(check.expr, dict.keys(schema.columns)),
+    expr_semantics.check_expr_column_refs(
+      check.expr,
+      dict.keys(schema.columns),
+      UnknownColumnReference,
+    ),
   )
 }
 
@@ -660,58 +683,6 @@ fn check_drop_constraint(
 //-----------------------------------------------------------------------------
 // Shared helpers
 //-----------------------------------------------------------------------------
-
-/// Every `ColumnRef` reachable inside `expr`, with its own span — the
-/// only kind of subexpression this module's checks ever need to blame
-/// individually; see the note on `Expr` in xast.gleam.
-fn collect_column_refs(expr: xast.Expr) -> List(#(String, Span)) {
-  case expr {
-    xast.IntLiteral(_)
-    | xast.NumericLiteral(_)
-    | xast.StringLiteral(_)
-    | xast.BoolLiteral(_)
-    | xast.NullLiteral -> []
-    xast.ColumnRef(name:, span:) -> [#(name, span)]
-    xast.UnaryOp(op: _, operand:) -> collect_column_refs(operand)
-    xast.BinaryOp(op: _, left:, right:) ->
-      list.append(collect_column_refs(left), collect_column_refs(right))
-    xast.Cast(expr:, data_type: _) -> collect_column_refs(expr)
-    xast.Between(expr:, negated: _, low:, high:) ->
-      list.flatten([
-        collect_column_refs(expr),
-        collect_column_refs(low),
-        collect_column_refs(high),
-      ])
-    xast.InList(expr:, negated: _, items:) ->
-      list.append(
-        collect_column_refs(expr),
-        list.flat_map(items, collect_column_refs),
-      )
-    xast.Like(expr:, negated: _, case_insensitive: _, pattern:) ->
-      list.append(collect_column_refs(expr), collect_column_refs(pattern))
-    xast.SimilarTo(expr:, negated: _, pattern:) ->
-      list.append(collect_column_refs(expr), collect_column_refs(pattern))
-    xast.IsNull(expr:, negated: _) -> collect_column_refs(expr)
-    xast.IsBool(expr:, negated: _, value: _) -> collect_column_refs(expr)
-    xast.IsDistinctFrom(left:, negated: _, right:) ->
-      list.append(collect_column_refs(left), collect_column_refs(right))
-    xast.FunctionCall(name: _, args:) ->
-      list.flat_map(args, collect_column_refs)
-  }
-}
-
-fn check_expr_column_refs(
-  expr: xast.Expr,
-  valid_names: List(String),
-) -> List(SemanticError) {
-  list.filter_map(collect_column_refs(expr), fn(ref) {
-    let #(name, span) = ref
-    case list.contains(valid_names, name) {
-      True -> Error(Nil)
-      False -> Ok(UnknownColumnReference(referenced: name, span: span))
-    }
-  })
-}
 
 /// Detects names in `items` that collide once compared via
 /// `postgres_name`, in order, reporting every later duplicate (not the

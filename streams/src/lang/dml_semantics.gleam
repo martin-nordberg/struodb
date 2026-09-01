@@ -3,7 +3,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import lang/catalog.{type Catalog}
 import lang/dml_ast as ast
-import lang/expr_ast as xast
+import lang/expr_semantics
 import lang/token.{type Span}
 
 //-----------------------------------------------------------------------------
@@ -71,7 +71,7 @@ fn check_insert(
     Error(Nil) -> [UnknownStream(name: stream_name, span: span)]
     Ok(schema) -> {
       // Neither the column list nor a `value_row` carries its own `Span`
-      // in the AST (see xast.gleam's `Insert`) — every error below that
+      // in the AST (see dml_ast.gleam's `Insert`) — every error below that
       // blames a specific column or row uses the statement's own `span`
       // instead of a more local one.
       let list_empty_err = case columns {
@@ -110,7 +110,12 @@ fn check_insert(
         list.flat_map(rows, fn(row) {
           list.flat_map(row, fn(value) {
             case value {
-              ast.ValueExpr(expr) -> check_expr_column_refs(expr, valid_names)
+              ast.ValueExpr(expr) ->
+                expr_semantics.check_expr_column_refs(
+                  expr,
+                  valid_names,
+                  UnknownColumnReference,
+                )
               ast.ValueDefault -> []
             }
           })
@@ -170,61 +175,5 @@ fn check_insert_omitted_column(
         False -> [InsertMissingRequiredColumn(column: name, span: span)]
       }
   }
-}
-
-//-----------------------------------------------------------------------------
-// Shared helpers
-//-----------------------------------------------------------------------------
-
-/// Every `ColumnRef` reachable inside `expr`, with its own span — the
-/// only kind of subexpression this module's checks ever need to blame
-/// individually; see the note on `Expr` in xast.gleam.
-fn collect_column_refs(expr: xast.Expr) -> List(#(String, Span)) {
-  case expr {
-    xast.IntLiteral(_)
-    | xast.NumericLiteral(_)
-    | xast.StringLiteral(_)
-    | xast.BoolLiteral(_)
-    | xast.NullLiteral -> []
-    xast.ColumnRef(name:, span:) -> [#(name, span)]
-    xast.UnaryOp(op: _, operand:) -> collect_column_refs(operand)
-    xast.BinaryOp(op: _, left:, right:) ->
-      list.append(collect_column_refs(left), collect_column_refs(right))
-    xast.Cast(expr:, data_type: _) -> collect_column_refs(expr)
-    xast.Between(expr:, negated: _, low:, high:) ->
-      list.flatten([
-        collect_column_refs(expr),
-        collect_column_refs(low),
-        collect_column_refs(high),
-      ])
-    xast.InList(expr:, negated: _, items:) ->
-      list.append(
-        collect_column_refs(expr),
-        list.flat_map(items, collect_column_refs),
-      )
-    xast.Like(expr:, negated: _, case_insensitive: _, pattern:) ->
-      list.append(collect_column_refs(expr), collect_column_refs(pattern))
-    xast.SimilarTo(expr:, negated: _, pattern:) ->
-      list.append(collect_column_refs(expr), collect_column_refs(pattern))
-    xast.IsNull(expr:, negated: _) -> collect_column_refs(expr)
-    xast.IsBool(expr:, negated: _, value: _) -> collect_column_refs(expr)
-    xast.IsDistinctFrom(left:, negated: _, right:) ->
-      list.append(collect_column_refs(left), collect_column_refs(right))
-    xast.FunctionCall(name: _, args:) ->
-      list.flat_map(args, collect_column_refs)
-  }
-}
-
-fn check_expr_column_refs(
-  expr: xast.Expr,
-  valid_names: List(String),
-) -> List(SemanticError) {
-  list.filter_map(collect_column_refs(expr), fn(ref) {
-    let #(name, span) = ref
-    case list.contains(valid_names, name) {
-      True -> Error(Nil)
-      False -> Ok(UnknownColumnReference(referenced: name, span: span))
-    }
-  })
 }
 //-----------------------------------------------------------------------------

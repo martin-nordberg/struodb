@@ -115,6 +115,7 @@ statement-family-specific — not kept in one module:
 shared/src/lang/     token.gleam / lexer.gleam       — lexical layer
   (used by both       expr_ast.gleam / expr_parser.gleam — expr, data_type,
    schema & streams)                                    GeneratedClause, NamedCheck
+                       expr_semantics.gleam            — column-reference checks
                        token_stream.gleam              — token cursor
                        catalog.gleam — a stream's declared shape
 
@@ -150,6 +151,15 @@ never changes one, since an `INSERT` never alters a stream's shape.
   `token_stream.gleam` is the token-list cursor (peek/advance) every
   parser production in `expr_parser`/`ddl_parser`/`dml_parser` is built
   from.
+- `expr_semantics.gleam` (shared) — `collect_column_refs`/
+  `check_expr_column_refs`, the `Expr`-walking helpers both
+  `ddl_semantics.gleam` and `dml_semantics.gleam` build their
+  column-reference checks on (used to be two verbatim copies, one per
+  package, until a review moved them here). `check_expr_column_refs`
+  takes the error constructor as a parameter (`fn(String, Span) -> e`)
+  rather than returning a fixed error type, since each package's
+  `UnknownColumnReference` belongs to its own distinct `SemanticError` —
+  callers just pass that variant's own constructor directly.
 - `catalog.gleam` (shared) — tracks the accumulated, validated shape of a
   stream as `CREATE STREAM`/`ALTER STREAM` statements are applied to it,
   via small primitives (`create_stream`, `add_column`, `drop_column`,
@@ -174,10 +184,8 @@ never changes one, since an `INSERT` never alters a stream's shape.
 - `ddl_semantics.gleam` (schema) / `dml_semantics.gleam` (streams) —
   validate a parsed statement against a `Catalog`. Each defines its own
   `SemanticError`, scoped to the variants it actually raises (no longer a
-  full copy of the other's). The two still duplicate their
-  column-reference-collecting helpers (`collect_column_refs`/
-  `check_expr_column_refs`) verbatim rather than sharing them — a known
-  simplification opportunity, not yet acted on.
+  full copy of the other's), and both call `expr_semantics.gleam` (above)
+  for column-reference checks rather than keeping their own copy.
 
 Only `CREATE STREAM`, `ALTER STREAM`, and `INSERT` are in scope so far;
 querying/subscribing to a stream's events is explicitly out of scope per
