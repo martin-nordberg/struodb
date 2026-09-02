@@ -107,7 +107,7 @@ newline (`reader.gleam`'s `is_quit_sentinel`).
 
 ### `shared/hlc` — hybrid logical clock
 
-Implements the algorithm in `documentation/docs/internals/hlc-spec.md`: each clock value is a
+Implements the algorithm in `documentation/docs/specifications/internals/hlc-spec.md`: each clock value is a
 15-character, base-62-encoded, lexicographically-sortable string
 (8 chars physical-time-ms, 2 chars logical counter, 5 chars caller-assigned
 node ID) sized to fit a PostgreSQL `char(15)` with no padding. `base62.gleam`
@@ -131,7 +131,7 @@ the alphabet breaks it.
 ### The StruoDB query language front end (`lang/`, split across `shared`/`schema`/`streams`)
 
 StruoDB's query language transpiles to PostgreSQL (see
-`documentation/docs/struoql/` — `lexical-spec.md` §1–§6,
+`documentation/docs/specifications/struoql/` — `lexical-spec.md` §1–§6,
 `ddl-spec.md` §7–§10, `dml-spec.md` §11 — for the full grammar, split
 across those three pages by section range; `overview.md` is the entry
 point). Expression parsing (`expr`, `data_type`) is one
@@ -228,7 +228,7 @@ never changes one, since an `INSERT` never alters a stream's shape.
 
 Only `CREATE STREAM`, `ALTER STREAM`, and `INSERT` are in scope so far;
 querying/subscribing to a stream's events is explicitly out of scope per
-the spec. `documentation/docs/struoql/design-decisions.md`'s "Open
+the spec. `documentation/docs/specifications/struoql/design-decisions.md`'s "Open
 Issues" section (renamed from the pre-VitePress spec's "Remaining open
 details") tracks still-undecided points — check there before assuming a
 gap in the code is a bug rather than known scope. Its "Settled Design
@@ -251,18 +251,18 @@ browse it locally) plus `documentation/plans/`, historical planning docs
 deliberately excluded from the built site (see its own `docs:build`
 script/`.vitepress/config.ts` sidebar, which never references `plans/`).
 
-- `documentation/docs/struoql/overview.md`, `lexical-spec.md`,
+- `documentation/docs/specifications/struoql/overview.md`, `lexical-spec.md`,
   `ddl-spec.md`, `dml-spec.md` — full query language grammar (lexical
   §1–§6, expressions/`CREATE`/`ALTER STREAM` §7–§10, `INSERT` §11).
-- `documentation/docs/struoql/design-decisions.md` — the spec's own
+- `documentation/docs/specifications/struoql/design-decisions.md` — the spec's own
   "Settled Design Decisions" (changelog recap) and "Open Issues"
   (undecided grammar points) — not a code-review-findings tracker.
 - `documentation/plans/lang/implementation-plan.md`,
   `documentation/plans/lang/codegen-plan.md` — planned work for the
   language front end and PostgreSQL codegen.
-- `documentation/docs/internals/hlc-spec.md` — the HLC algorithm.
+- `documentation/docs/specifications/internals/hlc-spec.md` — the HLC algorithm.
   `documentation/plans/hlc/implementation-plan.md` — its planned work.
-- `documentation/docs/internals/references.md` — external references
+- `documentation/docs/specifications/internals/references.md` — external references
   (CloudEvents, EventQL, PostgreSQL syntax docs) informing the design.
 
 No standalone code-review-findings tracker currently exists (the old

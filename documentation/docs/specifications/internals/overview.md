@@ -1,5 +1,5 @@
 # StruoDB Internals — Overview
 
-## Status
+## Summary
 
 This section covers specifications for the significant internal components of StruoDB.

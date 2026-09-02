@@ -162,7 +162,7 @@ to transpile bare: only a *quoted* source identifier can ever need
 requoting on the way out (whether for its content, or because it's one
 of the words below chosen deliberately, quoted), a narrower problem than
 checking every identifier regardless of how it was written; see
-`documentation/plans/lang/codegen-plan.md`'s identifier-quoting design
+`../../../plans/lang/codegen-plan.md`'s identifier-quoting design
 decision. A
 quoted identifier is unaffected — `"table"` is always valid, same as any
 other identifier, per §2.
@@ -324,7 +324,7 @@ standard.
 Not included, deferred: PostgreSQL's `E'...'` backslash-escape string
 syntax and its `$$...$$` / `$tag$...$tag$` dollar-quoted strings (the
 latter mainly earns its keep for function bodies, which StruoDB doesn't
-have yet). See [Open Issues](/struoql/design-decisions#open-issues).
+have yet). See [Open Issues](/specifications/struoql/design-decisions#open-issues).
 
 ## 5. Operators and Punctuation
 
@@ -395,7 +395,7 @@ JSON/JSONB operators.
 * `::` — PostgreSQL-style typecast (`expr :: data_type`), matching
   PostgreSQL directly rather than the SQL-standard `CAST(expr AS type)`
   (which isn't included — see
-  [Open Issues](/struoql/design-decisions#open-issues)).
+  [Open Issues](/specifications/struoql/design-decisions#open-issues)).
 
 ### 5.8 Punctuation
 * `(` `)` — grouping

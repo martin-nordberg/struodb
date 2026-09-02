@@ -1,106 +1,56 @@
+# CLAUDE.md
 
-Default to using Bun instead of Node.js.
+Guidance for working in `documentation/` — StruoDB's docs, kept separate
+from the Gleam packages at the repo root (see the root `CLAUDE.md`).
 
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
+## What this is
 
-## APIs
+A [VitePress](https://vitepress.dev/) static site under `docs/`, built
+and run with Bun. There's no server code, no frontend framework, nothing
+beyond Markdown content and `docs/.vitepress/config.ts` — the generic
+Bun runtime-API guidance (`Bun.serve`, `bun:sqlite`, HTML-import
+frontends, etc.) doesn't apply here.
 
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
+`plans/` (implementation-plan/codegen-plan docs, historical/working
+notes rather than published reference) sits alongside `docs/` but is
+deliberately excluded from the built site — `docs:build` only ever
+builds the `docs/` directory.
 
-## Testing
+## Commands
 
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
-
-## Frontend
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
+Run from this directory (`documentation/`):
 
 ```sh
-bun --hot ./index.ts
+bun install        # fetch deps (first run / after editing package.json)
+bun run docs:dev      # local dev server with hot reload
+bun run docs:build    # production build, output to docs/.vitepress/dist
+bun run docs:preview  # serve the production build locally
 ```
 
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+## Structure
+
+- `docs/specifications/struoql/` — the StruoQL language spec (lexical,
+  DDL, DML) plus its design-decisions history.
+- `docs/specifications/internals/` — specs for internal components
+  (currently the hybrid logical clock) and external references.
+- `docs/designs/` — design ideas / work in progress, less settled than
+  `specifications/`.
+- `docs/public/` — static assets served from the site root (favicon,
+  grammar-railroad diagram, PDFs) — anything under here is fetched as-is,
+  not processed as Markdown. The `x-specifications/`/`x-designs/`
+  subfolders mirror `docs/specifications/`/`docs/designs/`'s own
+  structure, holding each section's large non-Markdown assets (diagrams,
+  PDFs) linked from its pages via plain `<a href="/x-.../...">` tags.
+- `docs/.vitepress/config.ts` — nav, sidebar, and `<head>` (favicon
+  links) configuration.
+- `plans/` — see "What this is" above.
+
+## Conventions
+
+- Cross-references between pages use real Markdown links
+  (`[text](/specifications/...)`, with `#anchor` fragments where needed)
+  so `docs:build`'s dead-link check catches breakage — not bare
+  backtick-quoted paths, which it can't verify.
+- A page referencing a `plans/`-only file (not part of the built site)
+  does so as plain repo-relative text, since there's no live page to
+  link to.

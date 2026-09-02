@@ -57,7 +57,7 @@ binary_op ::= '+' | '-' | '*' | '/' | '%' | '^'
 ```
 
 `data_type` is as defined in §9.1 (no `CAST(expr AS type)` alternate form
-— see [Open Issues](/struoql/design-decisions#open-issues)). The `IN`
+— see [Open Issues](/specifications/struoql/design-decisions#open-issues)). The `IN`
 list is always an explicit parenthesized expression list; there's no
 subquery form (`IN (SELECT
 ...)`) since no querying syntax exists yet (§12).
@@ -205,7 +205,7 @@ checks, not by the productions above.
 
 Whether `column_clause`s may repeat, combine freely, or must appear in a
 particular order (e.g. can a column have both `DEFAULT` and `CHECK`?) is
-not yet constrained — see [Open Issues](/struoql/design-decisions#open-issues).
+not yet constrained — see [Open Issues](/specifications/struoql/design-decisions#open-issues).
 
 ### 9.2 The Automatic System Columns
 
@@ -216,7 +216,7 @@ grammar — prepended ahead of whatever the statement itself declares:
 
 | Column                  | Type          | Holds                                    |
 |--------------------------|---------------|-------------------------------------------|
-| `_struo_hlc`             | `CHAR(15)`    | The whole encoded HLC value ([Hybrid Logical Clock](/internals/hlc-spec)); the table's `PRIMARY KEY`. |
+| `_struo_hlc`             | `CHAR(15)`    | The whole encoded HLC value ([Hybrid Logical Clock](/specifications/internals/hlc-spec)); the table's `PRIMARY KEY`. |
 | `_struo_hlc_timestamp`   | `TIMESTAMPTZ` | The HLC's embedded physical-time field, as a real timestamp. |
 | `_struo_hlc_count`       | `INTEGER`     | The HLC's embedded logical counter. |
 | `_struo_hlc_node_id`     | `INTEGER`     | The HLC's embedded node id, decoded from base-62 to its integer value. |
@@ -248,13 +248,13 @@ STREAM`'s transpiled `CREATE TABLE` (§9.7), so PostgreSQL itself fills it
 in at the moment it actually inserts the row, not the client/codegen
 layer. This is deliberately a separate value from `_struo_hlc_timestamp`:
 that one is the HLC's own causality-ordering clock, which — per the
-[Hybrid Logical Clock](/internals/hlc-spec) spec's merge rule — can run
+[Hybrid Logical Clock](/specifications/internals/hlc-spec) spec's merge rule — can run
 ahead of true wall-clock time after a node merges in a remote clock
 reading; `_struo_created_at` is
 always PostgreSQL's own unadjusted idea of "now."
 
 A node's clock producing a duplicate HLC value is misbehaving (HLC values
-must be unique per the [Hybrid Logical Clock](/internals/hlc-spec) spec's
+must be unique per the [Hybrid Logical Clock](/specifications/internals/hlc-spec) spec's
 node-ID discipline); the
 transpiled table's `PRIMARY KEY` constraint on `_struo_hlc` is what
 actually rejects it, unless `INSERT`'s `ON CONFLICT DO NOTHING` (§11.5)
@@ -328,7 +328,7 @@ different rules about what the expression may reference:
 ### 9.6 Built-in Functions
 
 See §8.3 for the general rule (ordinary identifiers, not keywords). No
-built-in functions are defined yet — see [Open Issues](/struoql/design-decisions#open-issues).
+built-in functions are defined yet — see [Open Issues](/specifications/struoql/design-decisions#open-issues).
 
 ### 9.7 Example
 
@@ -418,7 +418,7 @@ become invalid under the new type:
 
 Narrowing, and converting between unrelated type families (e.g. `INT` to
 `DECIMAL`), aren't addressed by this rule and are presumed disallowed for
-now — see [Open Issues](/struoql/design-decisions#open-issues). Targeting
+now — see [Open Issues](/specifications/struoql/design-decisions#open-issues). Targeting
 one of the 5 automatic system columns (§9.2) is a compile-time error,
 same as §10.3's drop restriction.
 
@@ -436,7 +436,7 @@ same as §10.3's drop restriction.
 
   **How this is verified is not yet decided** — checking that one
   arbitrary boolean expression logically implies another is undecidable
-  in general. See [Open Issues](/struoql/design-decisions#open-issues)
+  in general. See [Open Issues](/specifications/struoql/design-decisions#open-issues)
   for the options under consideration (ranging from an unenforced
   documented convention to a pattern-matched check restricted to simple
   numeric comparisons).
@@ -466,4 +466,4 @@ bound, 90 instead of 100, as required by §10.5.)
 
 ### 10.8 Grammar Diagrams
 
-<a href="/x-struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>
+- <a href="/x-specifications/struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>

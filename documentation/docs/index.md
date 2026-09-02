@@ -7,20 +7,21 @@ hero:
   tagline: Events - sourced, merged and projected
   actions:
     - theme: brand
-      text: Markdown Examples
-      link: /markdown-examples
+      text: Specifications
+      link: /specifications/struoql/overview
     - theme: alt
-      text: API Examples
-      link: /api-examples
+      text: Designs
+      link: /designs/ideas/overview
 
 features:
   - title: Struo Query Language
     details: SQL-like query language for event schemas and projections 
-    link: /struoql/overview
+    link: /specifications/struoql/overview
   - title: Internals
     details: Specifications for key aspects of StruoDB's internal workings
-    link: /internals/overview
-  - title: Feature C
-    details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
+    link: /specifications/internals/overview
+  - title: Design Ideas
+    details: Ideas for StruoDB work in progress
+    link: /designs/ideas/overview
 ---
 
