@@ -1,11 +1,10 @@
-import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/string_tree
-import hlc/clock.{type ClockMessage}
+import hlc/clock
 import lang/catalog.{type Catalog}
 import lang/dml_ast as ast
 import lang/dml_parser
@@ -43,18 +42,21 @@ pub type CodegenError {
 /// chaining several batches doesn't need to special-case which kind it's
 /// threading.
 ///
-/// `clock` is a live HLC clock actor (`hlc/clock.start`) — unlike
-/// `schema/ddl_codegen.generate`, this is not a pure function of
-/// `catalog`/`source` alone: every row actually inserted draws its own
-/// fresh HLC value from `clock` (`clock.next_parts`), one per row across
-/// every statement in `source`, to populate the 4 automatic system
-/// columns (spec.md §9.2). Two calls with identical `catalog`/`source`
-/// but different clock state will render different `_STRUO_HLC...`
-/// values.
+/// `next_hlc` draws one fresh HLC value — unlike `schema/ddl_codegen.
+/// generate`, this is not a pure function of `catalog`/`source` alone:
+/// every row actually inserted calls `next_hlc` once, one draw per row
+/// across every statement in `source`, to populate the 4 automatic
+/// system columns (spec.md §9.2). Two calls with identical
+/// `catalog`/`source` but a `next_hlc` returning different values will
+/// render different `_STRUO_HLC...` values. A caller backed by a live
+/// `hlc/clock` actor passes `fn() { clock.next_parts(clock_subject) }`;
+/// taking a plain function here, rather than the actor `Subject`
+/// itself, keeps this module decoupled from `hlc/clock`'s actor-based
+/// implementation and trivial to drive with a canned sequence in tests.
 pub fn generate(
   catalog: Catalog,
   source: String,
-  clock: Subject(ClockMessage),
+  next_hlc: fn() -> clock.HlcParts,
 ) -> Result(#(String, Catalog), CodegenError) {
   use tokens <- result.try(
     lexer.tokenize(source) |> result.map_error(LexFailure),
@@ -64,7 +66,7 @@ pub fn generate(
     |> result.map_error(ParseFailure),
   )
   use final_catalog <- result.try(validate_all(catalog, statements, 0))
-  Ok(#(render_all(statements, clock), final_catalog))
+  Ok(#(render_all(statements, next_hlc), final_catalog))
 }
 
 /// Convenience wrapper for the common single-shot case: validates
@@ -74,9 +76,9 @@ pub fn generate(
 /// `Catalog` (e.g. one `schema/ddl_codegen.generate` already produced).
 pub fn generate_standalone(
   source: String,
-  clock: Subject(ClockMessage),
+  next_hlc: fn() -> clock.HlcParts,
 ) -> Result(String, CodegenError) {
-  use #(sql, _catalog) <- result.try(generate(catalog.empty(), source, clock))
+  use #(sql, _catalog) <- result.try(generate(catalog.empty(), source, next_hlc))
   Ok(sql)
 }
 
@@ -97,10 +99,12 @@ fn validate_all(
 
 fn render_all(
   statements: List(ast.DmlStatement),
-  clock: Subject(ClockMessage),
+  next_hlc: fn() -> clock.HlcParts,
 ) -> String {
   statements
-  |> list.map(fn(stmt) { insert_to_sql(stmt, clock) |> string_tree.from_string })
+  |> list.map(fn(stmt) {
+    insert_to_sql(stmt, next_hlc) |> string_tree.from_string
+  })
   |> string_tree.join("\n\n")
   |> string_tree.append("\n")
   |> string_tree.to_string
@@ -120,7 +124,7 @@ const system_column_names = [
 
 pub fn insert_to_sql(
   stmt: ast.DmlStatement,
-  clock: Subject(ClockMessage),
+  next_hlc: fn() -> clock.HlcParts,
 ) -> String {
   let ast.Insert(
     stream_name:,
@@ -143,7 +147,7 @@ pub fn insert_to_sql(
   <> ")\nVALUES\n  "
   <> {
     rows
-    |> list.map(fn(row) { row_to_sql(row, clock.next_parts(clock)) })
+    |> list.map(fn(row) { row_to_sql(row, next_hlc()) })
     |> string.join(",\n  ")
   }
   <> on_conflict_sql(on_conflict_do_nothing)

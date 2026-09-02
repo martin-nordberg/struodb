@@ -56,6 +56,13 @@ fn test_clock() -> Subject(ClockMessage) {
   c
 }
 
+/// The `fn() -> HlcParts` shape `dml_codegen` actually takes, backed by
+/// a real clock actor — mirrors how a production caller would close over
+/// `clock.next_parts(clock_subject)`.
+fn next_hlc(from subject: Subject(ClockMessage)) -> fn() -> clock.HlcParts {
+  fn() { clock.next_parts(subject) }
+}
+
 /// Mirrors `dml_codegen.gleam`'s own (private) system-column value
 /// rendering, so expected strings below are built from the same
 /// public building blocks the real codegen uses, not duplicated
@@ -107,7 +114,7 @@ fn insert_expected_sql(parts: clock.HlcParts) -> String {
 pub fn insert_matches_the_spec_worked_example_test() {
   let clock = test_clock()
   let parts = clock.next_parts(test_clock())
-  assert dml_codegen.insert_to_sql(insert_example(), clock)
+  assert dml_codegen.insert_to_sql(insert_example(), next_hlc(clock))
     == insert_expected_sql(parts)
 }
 
@@ -123,7 +130,7 @@ pub fn insert_with_a_default_value_and_no_on_conflict_or_returning_test() {
     )
   let clock = test_clock()
   let parts = clock.next_parts(test_clock())
-  assert dml_codegen.insert_to_sql(stmt, clock)
+  assert dml_codegen.insert_to_sql(stmt, next_hlc(clock))
     == "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a, b)\nVALUES\n  ("
     <> system_values_sql(parts)
     <> ", 1, DEFAULT);"
@@ -146,7 +153,7 @@ pub fn insert_with_multiple_rows_and_returning_star_test() {
   let expected_clock = test_clock()
   let parts1 = clock.next_parts(expected_clock)
   let parts2 = clock.next_parts(expected_clock)
-  assert dml_codegen.insert_to_sql(stmt, clock)
+  assert dml_codegen.insert_to_sql(stmt, next_hlc(clock))
     == "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a)\nVALUES\n  ("
     <> system_values_sql(parts1)
     <> ", 1),\n  ("
@@ -166,7 +173,7 @@ pub fn returning_an_aliased_expr_renders_the_alias_test() {
     )
   let clock = test_clock()
   let parts = clock.next_parts(test_clock())
-  assert dml_codegen.insert_to_sql(stmt, clock)
+  assert dml_codegen.insert_to_sql(stmt, next_hlc(clock))
     == "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a)\nVALUES\n  ("
     <> system_values_sql(parts)
     <> ", 1)\nRETURNING a AS b;"
@@ -203,7 +210,11 @@ pub fn generate_end_to_end_against_the_given_catalog_test() {
   let clock = test_clock()
   let parts = clock.next_parts(test_clock())
   let assert Ok(#(sql, catalog_after)) =
-    dml_codegen.generate(catalog_with_sensor_reading(), insert_source, clock)
+    dml_codegen.generate(
+      catalog_with_sensor_reading(),
+      insert_source,
+      next_hlc(clock),
+    )
   assert sql == insert_expected_sql(parts) <> "\n"
   // INSERT never changes a stream's shape.
   assert catalog_after == catalog_with_sensor_reading()
@@ -220,7 +231,7 @@ pub fn generate_standalone_validates_against_an_empty_catalog_test() {
   let assert Error(dml_codegen.SemanticFailure(
     statement_index: 0,
     errors: [dml_semantics.UnknownStream(name: "sensor_reading", span: _)],
-  )) = dml_codegen.generate_standalone(insert_source, test_clock())
+  )) = dml_codegen.generate_standalone(insert_source, next_hlc(test_clock()))
 }
 
 pub fn a_semicolon_inside_a_string_literal_is_not_a_statement_boundary_test() {
@@ -232,7 +243,11 @@ pub fn a_semicolon_inside_a_string_literal_is_not_a_statement_boundary_test() {
   let parts1 = clock.next_parts(expected_clock)
   let parts2 = clock.next_parts(expected_clock)
   let assert Ok(#(sql, _catalog)) =
-    dml_codegen.generate(catalog_with_a_stream_named_s(), source, clock)
+    dml_codegen.generate(
+      catalog_with_a_stream_named_s(),
+      source,
+      next_hlc(clock),
+    )
   assert sql
     == "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a)\nVALUES\n  ("
     <> system_values_sql(parts1)
@@ -245,7 +260,7 @@ pub fn a_semicolon_inside_a_string_literal_is_not_a_statement_boundary_test() {
 pub fn empty_input_is_a_parse_failure_not_ok_empty_test() {
   let assert Error(dml_codegen.ParseFailure(expr_parser.UnexpectedEof(
     expected: _,
-  ))) = dml_codegen.generate_standalone("", test_clock())
+  ))) = dml_codegen.generate_standalone("", next_hlc(test_clock()))
 }
 
 //-----------------------------------------------------------------------------
@@ -256,7 +271,7 @@ pub fn a_lex_error_in_a_later_statement_is_reported_test() {
   let assert Error(dml_codegen.LexFailure(lexer.UnterminatedString(at: _))) =
     dml_codegen.generate_standalone(
       "INSERT INTO s (a) VALUES (1); INSERT INTO s (a) VALUES ('",
-      test_clock(),
+      next_hlc(test_clock()),
     )
 }
 
@@ -267,7 +282,7 @@ pub fn a_syntax_error_in_a_later_statement_is_reported_test() {
   ))) =
     dml_codegen.generate_standalone(
       "INSERT INTO s (a) VALUES (1); INSERT INTO s VALUES (1)",
-      test_clock(),
+      next_hlc(test_clock()),
     )
 }
 
@@ -278,7 +293,11 @@ pub fn a_semantic_error_names_the_right_statement_and_does_not_cascade_test() {
     statement_index: 1,
     errors: [dml_semantics.UnknownStream(name: "nonexistent", span: _)],
   )) =
-    dml_codegen.generate(catalog_with_a_stream_named_s(), source, test_clock())
+    dml_codegen.generate(
+      catalog_with_a_stream_named_s(),
+      source,
+      next_hlc(test_clock()),
+    )
 }
 
 fn catalog_with_a_stream_named_s() -> catalog.Catalog {
