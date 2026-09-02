@@ -31,7 +31,7 @@ final shape, not a stopgap.
   multi-batch callers; see below). DDL codegen (`ddl_codegen.generate`)
   is pure text generation; DML codegen (`dml_codegen.generate`) is not —
   see "The 4 automatic system columns..." below — it additionally takes a
-  live HLC clock instance (`hlc/clock.start`) and draws one fresh value
+  live HLC clock instance (`hlc/clock_keeper.start`) and draws one fresh value
   per row actually inserted, so two calls with identical arguments but
   different clock state render different SQL.
 - **Out of scope**: actually connecting to or running anything against a
@@ -151,8 +151,8 @@ final shape, not a stopgap.
   `expr_codegen.expr_to_sql` any other column's `DEFAULT` goes through —
   not a one-off hardcoded string.
 - **`dml_codegen`'s `INSERT` rendering draws one fresh HLC value per row,
-  not per statement** — `clock.next_parts` (`hlc/clock.gleam`) is called
-  once for every row across every `INSERT` in the source, in row order,
+  not per statement** — `clock_keeper.next_parts` (`hlc/clock_keeper.gleam`)
+  is called once for every row across every `INSERT` in the source, in row order,
   and each draw's 4 decomposed fields become that row's leading 4
   values (`_struo_hlc` a quoted string literal; `_struo_hlc_timestamp`
   `to_timestamp(<seconds>.<millis>)` — a standard PostgreSQL builtin

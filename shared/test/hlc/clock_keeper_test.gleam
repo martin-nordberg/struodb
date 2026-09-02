@@ -4,8 +4,8 @@ import gleam/list
 import gleam/order
 import gleam/string
 import hlc/base62
-import hlc/clock
-import hlc/clock_state.{InvalidFormat, InvalidLength}
+import hlc/clock.{InvalidFormat, InvalidLength}
+import hlc/clock_keeper
 import support
 
 //-----------------------------------------------------------------------------
@@ -21,63 +21,64 @@ fn fixed_clock() -> fn() -> Int {
 //-----------------------------------------------------------------------------
 
 pub fn start_with_a_valid_node_id_succeeds_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
-  clock.stop(subject)
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
+  clock_keeper.stop(subject)
 }
 
 pub fn start_rejects_a_node_id_of_the_wrong_length_test() {
   let assert Error(InvalidLength(expected: 5, got: 3)) =
-    clock.start("abc", fixed_clock())
+    clock_keeper.start("abc", fixed_clock())
 }
 
 pub fn start_rejects_a_node_id_with_an_invalid_character_test() {
   let assert Error(InvalidFormat(nested: base62.InvalidCharacter(
     char: "-",
     index: 2,
-  ))) = clock.start("aB-x9", fixed_clock())
+  ))) = clock_keeper.start("aB-x9", fixed_clock())
 }
 
 pub fn consecutive_next_calls_strictly_increase_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
-  let first = clock.next(subject)
-  let second = clock.next(subject)
+  let first = clock_keeper.next(subject)
+  let second = clock_keeper.next(subject)
 
   assert string.compare(first, second) == order.Lt
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn next_parts_matches_next_parts_decoded_from_its_own_encoded_value_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
-  let parts = clock.next_parts(subject)
+  let parts = clock_keeper.next_parts(subject)
   let #(time_ms, counter) = decode_for_test(parts.encoded)
   let assert Ok(decoded_node_id) = base62.decode(node_id)
 
   assert parts.physical_time_ms == time_ms
   assert parts.counter == counter
   assert parts.node_id == decoded_node_id
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn next_parts_advances_the_same_state_next_does_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
-  let first = clock.next(subject)
-  let second = clock.next_parts(subject)
+  let first = clock_keeper.next(subject)
+  let second = clock_keeper.next_parts(subject)
 
   assert string.compare(first, second.encoded) == order.Lt
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn rollover_advances_time_and_resets_counter_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
   // 3_843 is the maximum 2-character base-62 counter value (62^2 - 1).
   // With a fixed `now`, every next() call after the first falls into the
   // "bump the counter" branch, so calling it 3_844 times exhausts the
   // counter and forces exactly one rollover on the final call.
-  let values = list.repeat(Nil, 3844) |> list.map(fn(_) { clock.next(subject) })
+  let values =
+    list.repeat(Nil, 3844) |> list.map(fn(_) { clock_keeper.next(subject) })
 
   // Every value in the whole sequence is strictly increasing as a string.
   let is_increasing =
@@ -98,90 +99,90 @@ pub fn rollover_advances_time_and_resets_counter_test() {
 
   assert string.compare(before_time, after_time) == order.Lt
   assert after_counter == "00"
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn merge_with_an_older_remote_value_increments_the_local_counter_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
   let older_remote = encode_for_test(fixed_now - 1000, 0, "zzzzz")
 
-  let assert Ok(merged) = clock.merge(subject, older_remote)
+  let assert Ok(merged) = clock_keeper.merge(subject, older_remote)
   let #(merged_time, merged_counter) = decode_for_test(merged)
 
   assert merged_time == fixed_now
   assert merged_counter == 1
   assert string.slice(merged, 10, 5) == node_id
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn merge_with_a_newer_remote_value_adopts_remote_time_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
   let remote_counter = 41
   let newer_remote = encode_for_test(fixed_now + 5000, remote_counter, "zzzzz")
 
-  let assert Ok(merged) = clock.merge(subject, newer_remote)
+  let assert Ok(merged) = clock_keeper.merge(subject, newer_remote)
   let #(merged_time, merged_counter) = decode_for_test(merged)
 
   assert merged_time == fixed_now + 5000
   assert merged_counter == remote_counter + 1
   assert string.slice(merged, 10, 5) == node_id
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn merge_at_equal_times_combines_counters_with_max_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
   // Three next() calls at a fixed `now` advance the counter to 3 (0 -> 1
   // -> 2 -> 3), at the same physical time as the remote value below.
-  let _ = clock.next(subject)
-  let _ = clock.next(subject)
-  let local = clock.next(subject)
+  let _ = clock_keeper.next(subject)
+  let _ = clock_keeper.next(subject)
+  let local = clock_keeper.next(subject)
   let #(_, local_counter) = decode_for_test(local)
   assert local_counter == 3
 
   let remote_counter = 0
   let remote_at_same_time = encode_for_test(fixed_now, remote_counter, "zzzzz")
 
-  let assert Ok(merged) = clock.merge(subject, remote_at_same_time)
+  let assert Ok(merged) = clock_keeper.merge(subject, remote_at_same_time)
   let #(merged_time, merged_counter) = decode_for_test(merged)
 
   assert merged_time == fixed_now
   assert merged_counter == int.max(local_counter, remote_counter) + 1
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn merge_rolls_over_the_same_way_next_does_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
   let remote_at_max_counter = encode_for_test(fixed_now, 3843, "zzzzz")
 
-  let assert Ok(merged) = clock.merge(subject, remote_at_max_counter)
+  let assert Ok(merged) = clock_keeper.merge(subject, remote_at_max_counter)
   let #(merged_time, merged_counter) = decode_for_test(merged)
 
   assert merged_time == fixed_now + 1
   assert merged_counter == 0
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn merge_rejects_a_malformed_remote_value_and_leaves_state_unchanged_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
 
   let assert Error(InvalidLength(expected: 15, got: 4)) =
-    clock.merge(subject, "bad!")
+    clock_keeper.merge(subject, "bad!")
 
-  let first = clock.next(subject)
-  let second = clock.next(subject)
+  let first = clock_keeper.next(subject)
+  let second = clock_keeper.next(subject)
   assert string.compare(first, second) == order.Lt
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 }
 
 pub fn stop_clock_terminates_the_actor_test() {
-  let assert Ok(subject) = clock.start(node_id, fixed_clock())
+  let assert Ok(subject) = clock_keeper.start(node_id, fixed_clock())
   let assert Ok(pid) = process.subject_owner(subject)
 
-  clock.stop(subject)
+  clock_keeper.stop(subject)
 
   support.wait_until_stopped(pid, 1000)
 }

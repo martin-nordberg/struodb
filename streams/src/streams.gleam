@@ -10,7 +10,7 @@ import gleam/int
 import gleam/io
 import gleam/string
 import gleam/time/timestamp
-import hlc/clock
+import hlc/clock_keeper
 import in
 
 // TODO: source this node's id from deployment configuration (e.g. an
@@ -24,7 +24,7 @@ pub fn main() {
 
   configure_logging()
 
-  let assert Ok(_clock) = clock.start(node_id, system_now_ms)
+  let assert Ok(_clock) = clock_keeper.start(node_id, system_now_ms)
 
   let writer = writer.start(io.println)
   let dispatcher =
