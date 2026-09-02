@@ -1,0 +1,45 @@
+name: test
+
+# A single, repo-root workflow — GitHub Actions only ever discovers
+# workflows under .github/workflows/ at the repository root, so the
+# previous one-file-per-package layout (domain/*/.github/workflows/
+# test.yml, from when each package was its own repository) never
+# actually ran once they became subdirectories of this monorepo. This
+# replaces all five with one real workflow: a matrix job keeps each
+# domain/* package's build/test/format-check independent of the others
+# (the property the old layout was going for), plus one job for
+# service/, which needs every domain/* package built first since its
+# bridges import their compiled output.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  domain:
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [shared, schema, streams, network, projections]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v2
+      - run: gleam deps download
+        working-directory: domain/${{ matrix.package }}
+      - run: gleam test --runtime bun
+        working-directory: domain/${{ matrix.package }}
+      - run: gleam format --check src test
+        working-directory: domain/${{ matrix.package }}
+
+  service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v2
+      - run: bun install
+      - run: bun run build:domain
+      - run: bun run --cwd service build
+      - run: bun run --cwd service test

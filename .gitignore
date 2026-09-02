@@ -4,3 +4,4 @@
 /build
 erl_crash.dump
 /.idea
+node_modules/

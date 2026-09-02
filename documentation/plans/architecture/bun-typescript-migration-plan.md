@@ -312,7 +312,7 @@ Rule: every `pub fn` in `facade.gleam` takes and returns only `String`
 signature. This is what makes "Gleam ADT types fully hidden from
 TypeScript" true at the boundary TypeScript code actually calls.
 
-Sketch, `domain/schema/src/facade.gleam`:
+Sketch, `domain/schema/src/ddl_facade.gleam`:
 
 ```gleam
 import gleam/json
@@ -332,7 +332,7 @@ pub fn apply_ddl(catalog_json: String, source: String) -> String {
 }
 ```
 
-Sketch, `domain/streams/src/facade.gleam` — the one place `next_hlc: fn()
+Sketch, `domain/streams/src/dml_facade.gleam` — the one place `next_hlc: fn()
 -> clock.HlcParts` (Phase 4's supplier shape, unchanged from today's
 `dml_codegen.generate`) still appears in a Gleam signature:
 
@@ -532,9 +532,11 @@ implementation rather than up front here; either preserves per-package
 5. Phase 7 (root tooling) before Phase 5/6, so there's a `bun install`-able
    workspace and a `build:domain` script to develop the facades/bridges
    against as they're written.
-6. Phase 5: write `domain/schema/src/facade.gleam` and
-   `domain/streams/src/facade.gleam` (plus the shared `Catalog` ⇄ JSON
-   codec), and each one's `facade_test.gleam`.
+6. Phase 5: write `domain/schema/src/ddl_facade.gleam` and
+   `domain/streams/src/dml_facade.gleam`, and each one's
+   `ddl_facade_test.gleam`/`dml_facade_test.gleam` — see "Implementation
+   notes" for how the `Catalog`-crossing design actually landed, versus
+   this section's original codec sketch.
 7. Phase 6: write `service/src/hlc-clock.ts`,
    `service/src/bridges/{schema,streams}-bridge.ts`, `service/src/main.ts`,
    and their `bun test` suites — verified against real `gleam build
@@ -543,16 +545,68 @@ implementation rather than up front here; either preserves per-package
    just locally.
 9. Phase 9: update `CLAUDE.md`s and any stale doc paths.
 
+## Implementation notes (how this actually landed)
+
+Written after building the plan above end to end. Kept as a record of
+where reality diverged from the sketch — see each item's own module for
+the full reasoning, not repeated here.
+
+- **`Catalog` crosses the boundary as an opaque handle, not JSON.** The
+  Phase 5 sketch above (`catalog_json: String`, a `Catalog ⇄ JSON` codec
+  living in `shared`) turned out to mean hand-writing a JSON encoding for
+  the *entire* `expr_ast.Expr`/`DataType` grammar (`ColumnSchema`'s
+  `default`/`generated` fields, and `NamedCheck`, embed arbitrary `Expr`
+  trees) — a large, separate undertaking. `ddl_facade.apply_ddl(catalog,
+  source)` instead returns `#(result_json, updated_catalog)`: TypeScript
+  stores `updated_catalog` and hands it back unchanged, exactly like
+  `hlc/clock.ClockState` — no serialization at all, since
+  `schema-bridge.ts` and `streams-bridge.ts` run in the same process. This
+  also resolves the "How/where is `catalog_json` persisted" question
+  below differently than expected: there's no JSON to persist between
+  calls at all in this shape, only an in-memory handle `main.ts` threads
+  through — a real multi-process/persisted-catalog design is still
+  deferred (see below), just no longer phrased as "where does the JSON
+  live."
+- **Facade modules are `ddl_facade.gleam`/`dml_facade.gleam`, not
+  `facade.gleam`.** Gleam module names are global across the whole build
+  graph, not per-package — `streams` depends on `schema` as a dev
+  dependency (see "The StruoDB query language front end" in `CLAUDE.md`),
+  so two modules both literally named `facade` collided at build time.
+  Renamed to match the codebase's existing `ddl_`/`dml_` convention
+  (`ddl_ast`, `ddl_parser`, ... / `dml_ast`, `dml_parser`, ...).
+- **CI consolidated into one root-level `.github/workflows/test.yml`**
+  (a matrix job over `domain/*` packages, plus a `service` job), not
+  Phase 8's "worth deciding" one-per-package option — because the
+  existing five nested `domain/*/.github/workflows/test.yml` files turned
+  out to be non-functional already: GitHub Actions only ever discovers
+  workflows under the *repository root's* `.github/workflows/`, and this
+  repo has no root-level `.github/` at all pre-migration. They were a
+  leftover from when each package was its own repository. Consolidating
+  was both the correct fix and the natural place to add the `service` job
+  `service/` genuinely needs (built after every `domain/*` package).
+- **`hlc/base62.gleam`'s capacity table caps at width 8, not 16.** Found
+  via a real `gleam build --target javascript` warning in Phase 3, not
+  anticipated above: `62^9` already exceeds JavaScript's
+  `Number.MAX_SAFE_INTEGER`, so widths 9–16 were silently imprecise under
+  this target. 8 is exactly `hlc/clock.gleam`'s widest field, so nothing
+  that was ever correct stops being supported.
+- **`main.ts` is a real minimal stdin-driven CLI**, not left as an
+  unresolved "hardcoded smoke-test call": one StruoQL statement per line,
+  routed to `schema-bridge`/`streams-bridge` by a leading-keyword check,
+  `~quit`/`~q` to end — echoing the deleted `reader.gleam`'s own sentinel.
+  Still not a real client protocol; see "deferred" below.
+
 ## Explicitly deferred (not decided by this plan)
 
-- How/where `catalog_json` is actually persisted between calls (a file, a
-  real Postgres table, an in-memory map in `main.ts` — this plan only
-  fixes the *shape* crossing the boundary, not its storage).
-- `node_id` sourcing/config for a real (non-single-process) deployment.
+- A real multi-process/shared `Catalog` persistence story (a file, a real
+  Postgres table, something richer than one process's in-memory handle —
+  see "Implementation notes" above for why this is no longer a JSON
+  *encoding* question, just a storage one).
+- `node_id` sourcing/config for a real (non-single-process) deployment
+  (`main.ts` reads `STRUODB_NODE_ID`, falling back to a hardcoded
+  single-node default).
 - Any HTTP layer (Hono) or real driven adapter (PostgreSQL via
   Drizzle/`pg`) — the PDF's "eventual aim," intentionally not started
-  here.
+  here; `main.ts`'s stdin loop is not a real client protocol.
 - Splitting `service/` into per-domain apps — the workspace shape (Phase
   7) is chosen so this is additive later, not a decision to make now.
-- Whether CI consolidates to one root workflow or stays one-per-package
-  (Phase 8) — left as an implementation-time call.

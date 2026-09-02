@@ -4,131 +4,145 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-StruoDB is a distributed event-source database, written in Gleam (targeting
-Erlang/OTP). It's a monorepo of five independent Gleam packages, each with
-its own `gleam.toml`, `manifest.toml`, and CI workflow:
+StruoDB is a distributed event-source database. Domain logic is written in
+Gleam, compiled to the **JavaScript target** and run on **Bun**; the outer
+application layer (`service/`) is TypeScript. See
+`documentation/plans/architecture/bun-typescript-migration-plan.md` for the
+migration this repo went through to get here (Erlang/OTP target, actor
+pipelines, and a per-package flat layout previously) — still the best
+account of *why* the repo is shaped the way it is below, even though its
+own steps are now complete.
 
-- **`shared/`** — library package with an async I/O actor pipeline
-  (`asyncio/`), a hybrid logical clock (`hlc/`), and the lexical/
-  expression layer of the StruoDB query language front end (`lang/` — see
-  "The StruoDB query language front end" below). Every other package
-  depends on it via `shared = { path = "../shared" }`.
-- **`schema/`** — application intended to handle schema-defining DDL
-  commands. Its `lang/` now has real `CREATE STREAM`/`ALTER STREAM`
-  parsing, semantic analysis, and catalog-tracking; the app's own `main`
-  is still the stub print below, not yet wired to any of it.
-- **`streams/`** — application intended to handle stream manipulation
-  commands. Its `lang/` now has real `INSERT` parsing and semantic
-  analysis; `streams/src/streams.gleam`'s current `main` is unrelated
-  actor-pipeline demo code, not stream-manipulation logic wired to any of
-  it yet. Production code depends only on `shared`; `schema` is a
-  dev-only dependency, used solely by one test that builds a `Catalog` via
-  real DDL parsing — see "The StruoDB query language front end" below.
-- **`projections/`** — application intended to handle projection
-  behaviors.
-- **`network/`** — application intended to maintain network configuration
-  for the distributed database.
+`domain/` holds five independent Gleam packages, each with its own
+`gleam.toml`/`manifest.toml` (`target = "javascript"` in every one) and no
+repo-wide Gleam build/test runner — commands run from inside the package
+directory you're working on:
 
-`projections` and `network` are currently stubs (a `main` that prints
-`"Hello from <name>!"` and a placeholder test) — they exist as the
-intended service boundaries but have no logic yet. `schema` and `streams`
-have real language-front-end logic under `lang/` now (see below), but
-still no logic wired to their actual DDL/stream-manipulation purpose.
-When implementing DDL, stream manipulation, projection, or network
-features, expect to build them out from this state, likely pulling shared
-logic from (or into) `shared/`.
+- **`domain/shared/`** — library package with a hybrid logical clock
+  (`hlc/`) and the lexical/expression layer of the StruoDB query language
+  front end (`lang/` — see "The StruoDB query language front end" below).
+  Every other domain package depends on it via `shared = { path =
+  "../shared" }`.
+- **`domain/schema/`** — handles schema-defining DDL commands. Its `lang/`
+  has real `CREATE STREAM`/`ALTER STREAM` parsing, semantic analysis, and
+  catalog-tracking, wired up for external callers via `src/ddl_facade.gleam`
+  (see "Facades and the TypeScript boundary" below) — `schema.gleam` itself
+  has no `main` any more (see "TypeScript application layer" below for
+  where driving now happens).
+- **`domain/streams/`** — handles stream manipulation commands. Its
+  `lang/` has real `INSERT` parsing and semantic analysis, wired up via
+  `src/dml_facade.gleam`. Production code depends only on `shared`;
+  `schema` is a dev-only dependency, used solely by tests that build a
+  `Catalog` via real DDL parsing — see "The StruoDB query language front
+  end" below.
+- **`domain/projections/`** — intended to handle projection behaviors.
+- **`domain/network/`** — intended to maintain network configuration for
+  the distributed database.
 
-Toolchain is pinned in `mise.toml`: Erlang 29, Gleam 1.18.
+`domain/projections` and `domain/network` are currently stubs (a `main`
+that prints `"Hello from <name>!"` and a placeholder test) — they exist as
+the intended service boundaries but have no logic yet. `domain/schema` and
+`domain/streams` have real language-front-end logic under `lang/` now (see
+below), each behind its own facade. When implementing DDL, stream
+manipulation, projection, or network features, expect to build them out
+from this state, likely pulling shared logic from (or into)
+`domain/shared/`.
+
+`service/` is the one TypeScript application (a Bun package, part of the
+root `package.json`'s Bun workspace) that drives the Gleam domain packages
+— see "TypeScript application layer" below.
+
+Toolchain is pinned in `mise.toml`: Bun 1.4, Gleam 1.18. (No Erlang —
+nothing targets it any more; `gleam`'s own CLI has no Erlang/OTP runtime
+dependency of its own regardless of target.)
 
 ## Commands
 
-All commands are run **from inside the package directory you're working
-on** (`shared/`, `schema/`, `streams/`, `projections/`, or `network/`) —
-there is no repo-wide build/test runner.
+Gleam commands run **from inside the package directory you're working on**
+(`domain/shared/`, `domain/schema/`, `domain/streams/`, `domain/network/`,
+or `domain/projections/`):
 
 ```sh
-gleam deps download   # fetch dependencies (first run / after editing gleam.toml)
-gleam build            # compile
-gleam test             # run that package's test suite (gleeunit)
-gleam format src test  # format
-gleam format --check src test   # check formatting only (what CI runs)
-gleam run              # run the package's main (apps only, not `shared`)
+gleam deps download          # fetch dependencies (first run / after editing gleam.toml)
+gleam build                  # compile (javascript target, per that package's gleam.toml)
+gleam test --runtime bun     # run that package's test suite (gleeunit) on Bun
+gleam format src test        # format
+gleam format --check src test  # check formatting only (what CI runs)
 ```
+
+(No `gleam run` for any domain package any more — none has a `main` left;
+driving happens from `service/`, below.)
 
 To run a single test module or test case, use gleeunit's filtering via
-`gleam test`, e.g. from `shared/`:
+`gleam test`, e.g. from `domain/shared/`:
 
 ```sh
-gleam test -- --seed 1 dispatcher_test
+gleam test --runtime bun -- --seed 1 base62_test
 ```
 
-(gleeunit runs every `..._test.gleam` file's exported `..._test()`
-functions; there's no per-file flag beyond what `gleam test --` forwards to
-the underlying `eunit` filter.)
+Root-level scripts (from the repo root; see `package.json`) wrap the above
+across every `domain/*` package at once:
 
-CI (`.github/workflows/test.yml`, identical in every package) runs
-`gleam deps download`, `gleam test`, then `gleam format --check src test` —
-match that before considering work done.
+```sh
+bun run build:domain          # gleam build in every domain/* package
+bun run test:domain           # gleam test --runtime bun in every domain/* package
+bun run format:domain:check   # gleam format --check src test in every domain/* package
+```
 
-`build/` directories (present per-package) are Gleam's compiled/dependency
-output and are not source — never edit files under `*/build/`.
+`service/` (a Bun package):
+
+```sh
+bun install               # from the repo root — fetches service/'s deps too (Bun workspace)
+bun run --cwd service dev    # bun run build:domain, then run src/main.ts against stdin
+bun run --cwd service build  # bun run build:domain, then a type-check (tsc --noEmit)
+bun run --cwd service test   # bun run build:domain, then bun test
+```
+
+CI (`.github/workflows/test.yml`, one root-level workflow) matrixes
+`gleam deps download` / `gleam test --runtime bun` / `gleam format --check
+src test` across every `domain/*` package, plus a `service` job building
+every `domain/*` package and running `service/`'s own type-check and
+`bun test` — match that before considering work done.
+
+`build/` directories (present per `domain/*` package, gitignored) are
+Gleam's compiled JS output — `service/`'s bridges import directly from
+them (see below) — and dependency cache; not source, never edit files
+under `domain/*/build/`.
 
 ## Architecture notes
 
-### `shared/asyncio` — actor pipeline for line-oriented job processing
+### `domain/shared/hlc` — hybrid logical clock
 
-A `reader` reads lines of input and forwards each as a job (`AddJob`) to a
-`dispatcher` actor. The dispatcher owns a pool of `worker` actors bounded by
-`max_worker_count`, keeping up to `max_idle_worker_count` idle workers
-alive and stopping the rest; jobs queue (`Deque`) when all workers are
-busy. A worker calls the caller-supplied `handle_input: fn(String) ->
-String` and sends the result to a shared `writer` actor for output. Message
-types for all four roles live centrally in `asyncio/messages.gleam`
-(`DispatcherMessage`, `WorkerMessage`, `WriterMessage`); actors talk to each
-other only through these, never through shared state.
+Implements the algorithm in
+`documentation/docs/specifications/internals/hlc-spec.md`: each clock
+value is a 15-character, base-62-encoded, lexicographically-sortable
+string (8 chars physical-time-ms, 2 chars logical counter, 5 chars
+caller-assigned node ID) sized to fit a PostgreSQL `char(15)` with no
+padding. `base62.gleam` is the pure encode/decode — its capacity lookup
+table stops at width 8, not a larger "generous" ceiling: `62^9` already
+exceeds JavaScript's `Number.MAX_SAFE_INTEGER`, and 8 is exactly
+`clock.gleam`'s own widest field (`time_width`), the largest this codebase
+ever needs. `clock.gleam` holds the per-node `(time, counter, node_id)`
+state machine itself (`next()`/`next_parts()` for local events, `merge()`
+on an incoming remote value per the spec's merge rule) as plain functions
+over an opaque `ClockState` — no actor, no mutable state, no
+`gleam/erlang`/`gleam/otp` dependency at all.
 
-The dispatcher stops gracefully rather than dropping in-flight work or
-leaking its worker pool: `StopDispatcher` moves it through
-`Ready -> Draining -> Stopping -> Stopped` (see the `DispatcherStatus` doc
-comment in `dispatcher.gleam`) — draining lets already-queued jobs finish
-while rejecting new `AddJob`s, then every worker is told to stop once it's
-next idle, and only once every worker has been told to stop does the
-dispatcher call `actor.stop()` itself. `dispatcher.stop(subject)` (mirroring
-`writer.stop`) sends `StopDispatcher` and blocks until the actor has
-actually exited — unlike `writer.stop`, with no fixed timeout, since
-draining a backlog has no bound. It's the caller that started the
-dispatcher's job to call it (see `streams.gleam`'s `main`, which does so
-after `reader.read_loop` returns and before stopping the writer) —
-`reader.gleam` itself still only fire-and-forgets `StopDispatcher` on the
-quit sentinel and does not wait. The quit sentinel is `~quit` or its
-abbreviation `~q`, matched after trimming trailing line-ending whitespace
-so it's recognized whether or not the input's last line has a trailing
-newline (`reader.gleam`'s `is_quit_sentinel`).
+There is no Gleam-side actor wrapper any more (the pre-migration
+`clock_keeper.gleam` is gone). `service/src/hlc-clock.ts`'s `HlcClock`
+class is what replaced it: a plain TypeScript class holding one
+`ClockState` (imported opaquely from compiled Gleam output, never
+constructed or inspected — see that file's header comment) and calling
+straight through to `clock.new$`/`next`/`next_parts`/`merge` on each
+method call, the same "one clock per process, called synchronously" role
+`clock_keeper.gleam`'s actor used to play. `service/src/main.ts`
+constructs the one `HlcClock` a process uses and passes it to whichever
+bridge needs it (today, `streams-bridge.ts`, for `INSERT`'s per-row HLC
+stamping). The lexicographic-order-equals-value-order invariant
+(fixed-width, zero-padded fields; monotonic alphabet) is load-bearing —
+any change to field widths or the alphabet breaks it.
 
-### `shared/hlc` — hybrid logical clock
-
-Implements the algorithm in `documentation/docs/specifications/internals/hlc-spec.md`: each clock value is a
-15-character, base-62-encoded, lexicographically-sortable string
-(8 chars physical-time-ms, 2 chars logical counter, 5 chars caller-assigned
-node ID) sized to fit a PostgreSQL `char(15)` with no padding. `base62.gleam`
-is the pure encode/decode; `clock.gleam` holds the per-node
-`(time, counter, node_id)` state machine itself (`next()`/`next_parts()`
-for local events, `merge()` on an incoming remote value per the spec's
-merge rule) as plain functions over an opaque `ClockState` — no actor, no
-`gleam/erlang`/`gleam/otp` dependency at all. `clock_keeper.gleam` is a
-thin actor wrapper around it: it owns one `ClockState` as its own actor
-state and, on every `ClockMessage`, calls straight through to
-`clock.next`/`next_parts`/`merge` for the next state and reply value.
-The split exists so a caller that only needs `HlcParts`/the state
-machine (e.g. `streams/lang/dml_codegen.gleam`) can depend on
-`clock.gleam` alone, without pulling in `gleam_otp`/`gleam_erlang`
-— packages with no JavaScript-target support at all, which matters if
-StruoDB ever needs a non-BEAM target. The
-lexicographic-order-equals-value-order invariant (fixed-width, zero-padded
-fields; monotonic alphabet) is load-bearing — any change to field widths or
-the alphabet breaks it.
-
-### The StruoDB query language front end (`lang/`, split across `shared`/`schema`/`streams`)
+### The StruoDB query language front end (`lang/`, split across `domain/shared`/`domain/schema`/`domain/streams`)
 
 StruoDB's query language transpiles to PostgreSQL (see
 `documentation/docs/specifications/struoql/` — `lexical-spec.md` §1–§6,
@@ -140,21 +154,23 @@ so `lang/` exists in three places, split by what's reused vs. what's
 statement-family-specific — not kept in one module:
 
 ```
-shared/src/lang/     token.gleam / lexer.gleam       — lexical layer
-  (used by both       expr_ast.gleam / expr_parser.gleam — expr, data_type,
-   schema & streams)                                    GeneratedClause, NamedCheck
-                       expr_semantics.gleam            — column-reference checks
-                       expr_codegen.gleam              — expr/data_type -> SQL text
-                       token_stream.gleam              — token cursor
-                       catalog.gleam — a stream's declared shape
+domain/shared/src/lang/  token.gleam / lexer.gleam       — lexical layer
+  (used by both          expr_ast.gleam / expr_parser.gleam — expr, data_type,
+   schema & streams)                                        GeneratedClause, NamedCheck
+                          expr_semantics.gleam            — column-reference checks
+                          expr_codegen.gleam              — expr/data_type -> SQL text
+                          token_stream.gleam              — token cursor
+                          catalog.gleam — a stream's declared shape
 
-schema/src/lang/     ddl_ast.gleam / ddl_parser.gleam    — CREATE/ALTER STREAM
-  (DDL)               ddl_semantics.gleam
-                       ddl_codegen.gleam — DdlStatement -> CREATE/ALTER TABLE SQL
+domain/schema/src/lang/  ddl_ast.gleam / ddl_parser.gleam    — CREATE/ALTER STREAM
+  (DDL)                  ddl_semantics.gleam
+                          ddl_codegen.gleam — DdlStatement -> CREATE/ALTER TABLE SQL
+domain/schema/src/       ddl_facade.gleam — JSON-in/JSON-out entry point (see below)
 
-streams/src/lang/    dml_ast.gleam / dml_parser.gleam    — INSERT
-  (DML)               dml_semantics.gleam
-                       dml_codegen.gleam — DmlStatement -> INSERT INTO SQL
+domain/streams/src/lang/ dml_ast.gleam / dml_parser.gleam    — INSERT
+  (DML)                  dml_semantics.gleam
+                          dml_codegen.gleam — DmlStatement -> INSERT INTO SQL
+domain/streams/src/      dml_facade.gleam — JSON-in/JSON-out entry point (see below)
 ```
 
 A DDL statement's pipeline: `source text → shared/lexer.tokenize →
@@ -167,6 +183,9 @@ record the resulting shape. `INSERT` follows the same shape one package
 over, through `streams/dml_parser` → `streams/dml_ast.DmlStatement` →
 `streams/dml_semantics.analyze` — which validates against a `Catalog` but
 never changes one, since an `INSERT` never alters a stream's shape.
+`schema/ddl_facade.gleam`/`streams/dml_facade.gleam` are the outermost
+layer over each pipeline — see "Facades and the TypeScript boundary"
+below.
 
 - `token.gleam` / `lexer.gleam` (shared) — lexical layer: keywords are
   case-insensitive, unquoted identifiers fold to lower case, quoted
@@ -236,12 +255,73 @@ Decisions" section (the old spec.md §13) is a changelog recap of
 already-settled points, useful for why something is the way it is
 without re-deriving the reasoning from source.
 
+### Facades and the TypeScript boundary
+
+`domain/schema/src/ddl_facade.gleam` and `domain/streams/src/dml_facade.gleam`
+are each package's *only* export to TypeScript — everything else under
+`lang/` stays internal. Every function's content (StruoQL source text in;
+generated SQL or an error description out) crosses as a plain
+string/JSON, never a Gleam ADT. `Catalog` is the one deliberate exception,
+and threads through *opaquely*: `ddl_facade.apply_ddl(catalog, source)`
+returns `#(result_json, updated_catalog)`, and a caller (TypeScript, or
+another Gleam module) stores `updated_catalog` and hands it back on the
+next call without ever constructing or inspecting it — exactly like
+`hlc/clock.ClockState` above. This was a deliberate choice over a
+`Catalog ⇄ JSON` codec (see `ddl_facade.gleam`'s own header comment): a
+full codec would mean hand-writing a JSON encoding for the entire
+`expr_ast.Expr`/`DataType` grammar too (`ColumnSchema`'s `default`/
+`generated` fields, and `NamedCheck`, embed arbitrary `Expr` trees), and
+would force `streams` to decode a `schema`-produced JSON catalog shape —
+duplicating knowledge that boundary is meant to keep out of `streams` in
+the first place. Threading the value opaquely costs nothing, since
+`schema-bridge.ts` and `streams-bridge.ts` (below) run in the same
+TypeScript process.
+
+`dml_facade.apply_insert(catalog, source, next_hlc)` is the one place a
+plain Gleam function type (`next_hlc: fn() -> HlcParts`, unchanged from
+`dml_codegen.generate`'s own signature) appears in a facade's public
+signature — only `streams-bridge.ts` ever constructs a closure to satisfy
+it, by calling a TypeScript-held `HlcClock`'s `nextParts()`; no other
+TypeScript code calls `dml_facade` directly.
+
+Both facades render every error via `string.inspect` rather than a
+hand-written message per `CodegenError`/`SemanticError` variant — a
+deliberate early scope cut (see `ddl_facade.gleam`'s `error_json`); a
+caller needing to branch on *which* failure occurred, not just display
+one, still has the real `ddl_codegen`/`dml_codegen`/`*_semantics` modules
+to call directly from Gleam.
+
+### TypeScript application layer (`service/`)
+
+`service/` is a Bun/TypeScript application — the "driving adapter" half of
+the hexagonal split explored in
+`documentation/docs/public/x-designs/ideas/Gleam-TypeScript-Hexagonal-Architecture.pdf`
+(no "driven adapter"/persistence layer exists yet; see the migration
+plan's "Explicitly deferred" section). `src/main.ts` is the composition
+root: builds one `HlcClock` (`src/hlc-clock.ts`) and one `CatalogHandle`
+(`schema-bridge.emptyCatalog()`), then reads StruoQL statements from
+stdin, routing `CREATE`/`ALTER` text to `schema-bridge.applyDdl` and
+everything else to `streams-bridge.applyInsert`, threading the catalog
+handle from each `applyDdl` call into the next.
+
+`src/bridges/schema-bridge.ts` and `src/bridges/streams-bridge.ts` are the
+*only* files allowed to import a `domain/*/build/dev/javascript/...` path
+directly (Gleam emits no `.d.ts`, so these imports carry a `@ts-expect-
+error` and everything they return is cast to an explicit local type) —
+every other TypeScript file calls their typed wrapper functions instead.
+Each corresponding domain package must be built (`gleam build`, or `bun
+run build:domain` from the repo root) before `service/` can import its
+compiled output — `service/package.json`'s `prebuild`/`pretest` scripts do
+this automatically.
+
 ### Logging and errors
 
-Actors use `birch` for structured logging (see `dispatcher.gleam` for the
-convention: `log.debug_m("message", [#("key", value), ...])`). Gleam's
-`use`/`case` idioms are used for control flow; `let assert` appears where a
-failure is meant to crash the actor/test rather than be handled.
+Gleam's `use`/`case` idioms are used for control flow; `let assert`
+appears where a failure is meant to crash rather than be handled. There is
+currently no structured-logging library in use anywhere in this repo (the
+pre-migration actor pipeline's `birch` usage was deleted along with it,
+per the migration plan) — a TypeScript-side caller (`service/`) logs with
+plain `console.log`/`console.error` for now.
 
 ### Docs worth reading before working in a given area
 
@@ -251,6 +331,10 @@ browse it locally) plus `documentation/plans/`, historical planning docs
 deliberately excluded from the built site (see its own `docs:build`
 script/`.vitepress/config.ts` sidebar, which never references `plans/`).
 
+- `documentation/plans/architecture/bun-typescript-migration-plan.md` —
+  the Gleam-target/Bun/TypeScript migration this repo went through; the
+  best account of why `domain/`/`service/` and the facade/bridge split
+  are shaped the way they are.
 - `documentation/docs/specifications/struoql/overview.md`, `lexical-spec.md`,
   `ddl-spec.md`, `dml-spec.md` — full query language grammar (lexical
   §1–§6, expressions/`CREATE`/`ALTER STREAM` §7–§10, `INSERT` §11).
@@ -261,7 +345,9 @@ script/`.vitepress/config.ts` sidebar, which never references `plans/`).
   `documentation/plans/lang/codegen-plan.md` — planned work for the
   language front end and PostgreSQL codegen.
 - `documentation/docs/specifications/internals/hlc-spec.md` — the HLC algorithm.
-  `documentation/plans/hlc/implementation-plan.md` — its planned work.
+  `documentation/plans/hlc/implementation-plan.md` — its planned work
+  (predates the actor's removal — see the migration plan instead for the
+  current TypeScript-held-state shape).
 - `documentation/docs/specifications/internals/references.md` — external references
   (CloudEvents, EventQL, PostgreSQL syntax docs) informing the design.
 
