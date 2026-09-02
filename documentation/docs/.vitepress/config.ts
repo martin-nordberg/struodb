@@ -20,7 +20,7 @@ export default defineConfig({
           { text: 'Lexical Spec', link: '/struoql/lexical-spec' },
           { text: 'Schema Definition', link: '/struoql/ddl-spec' },
           { text: 'Event Creation', link: '/struoql/dml-spec' },
-          { text: 'To Do', link: '/struoql/todo' },
+          { text: 'Design Decisions', link: '/struoql/design-decisions' },
         ]
       },
       {

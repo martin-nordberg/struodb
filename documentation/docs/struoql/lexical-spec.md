@@ -324,7 +324,7 @@ standard.
 Not included, deferred: PostgreSQL's `E'...'` backslash-escape string
 syntax and its `$$...$$` / `$tag$...$tag$` dollar-quoted strings (the
 latter mainly earns its keep for function bodies, which StruoDB doesn't
-have yet). See "Remaining open details" below.
+have yet). See [Open Issues](/struoql/design-decisions#open-issues).
 
 ## 5. Operators and Punctuation
 
@@ -394,7 +394,8 @@ JSON/JSONB operators.
 ### 5.7 Typecast
 * `::` — PostgreSQL-style typecast (`expr :: data_type`), matching
   PostgreSQL directly rather than the SQL-standard `CAST(expr AS type)`
-  (which isn't included — see "Remaining open details").
+  (which isn't included — see
+  [Open Issues](/struoql/design-decisions#open-issues)).
 
 ### 5.8 Punctuation
 * `(` `)` — grouping

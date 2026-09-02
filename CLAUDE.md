@@ -228,13 +228,13 @@ never changes one, since an `INSERT` never alters a stream's shape.
 
 Only `CREATE STREAM`, `ALTER STREAM`, and `INSERT` are in scope so far;
 querying/subscribing to a stream's events is explicitly out of scope per
-the spec. `documentation/docs/struoql/todo.md` ("Remaining Open Details")
-tracks still-undecided points — check there before assuming a gap in the
-code is a bug rather than known scope. (The pre-VitePress spec's own
-§13 "Design decisions" — a changelog recap of settled points, distinct
-from "Remaining open details" — does not appear in any of the split
-pages as of the 2026-09-02 docs reorg; flagged to the user, not yet
-relocated.)
+the spec. `documentation/docs/struoql/design-decisions.md`'s "Open
+Issues" section (renamed from the pre-VitePress spec's "Remaining open
+details") tracks still-undecided points — check there before assuming a
+gap in the code is a bug rather than known scope. Its "Settled Design
+Decisions" section (the old spec.md §13) is a changelog recap of
+already-settled points, useful for why something is the way it is
+without re-deriving the reasoning from source.
 
 ### Logging and errors
 
@@ -254,9 +254,9 @@ script/`.vitepress/config.ts` sidebar, which never references `plans/`).
 - `documentation/docs/struoql/overview.md`, `lexical-spec.md`,
   `ddl-spec.md`, `dml-spec.md` — full query language grammar (lexical
   §1–§6, expressions/`CREATE`/`ALTER STREAM` §7–§10, `INSERT` §11).
-- `documentation/docs/struoql/todo.md` — the spec's own "Remaining Open
-  Details" (settled-but-unimplemented/undecided grammar points) — despite
-  the "To Do" nav label, this is not a code-review-findings tracker.
+- `documentation/docs/struoql/design-decisions.md` — the spec's own
+  "Settled Design Decisions" (changelog recap) and "Open Issues"
+  (undecided grammar points) — not a code-review-findings tracker.
 - `documentation/plans/lang/implementation-plan.md`,
   `documentation/plans/lang/codegen-plan.md` — planned work for the
   language front end and PostgreSQL codegen.

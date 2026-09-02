@@ -57,8 +57,9 @@ binary_op ::= '+' | '-' | '*' | '/' | '%' | '^'
 ```
 
 `data_type` is as defined in §9.1 (no `CAST(expr AS type)` alternate form
-— see "Remaining open details"). The `IN` list is always an explicit
-parenthesized expression list; there's no subquery form (`IN (SELECT
+— see [Open Issues](/struoql/design-decisions#open-issues)). The `IN`
+list is always an explicit parenthesized expression list; there's no
+subquery form (`IN (SELECT
 ...)`) since no querying syntax exists yet (§12).
 
 `bound_expr` is `expr` restricted to precedence level 6 or tighter
@@ -204,7 +205,7 @@ checks, not by the productions above.
 
 Whether `column_clause`s may repeat, combine freely, or must appear in a
 particular order (e.g. can a column have both `DEFAULT` and `CHECK`?) is
-not yet constrained — see "Remaining open details."
+not yet constrained — see [Open Issues](/struoql/design-decisions#open-issues).
 
 ### 9.2 The Automatic System Columns
 
@@ -327,7 +328,7 @@ different rules about what the expression may reference:
 ### 9.6 Built-in Functions
 
 See §8.3 for the general rule (ordinary identifiers, not keywords). No
-built-in functions are defined yet — see "Remaining open details."
+built-in functions are defined yet — see [Open Issues](/struoql/design-decisions#open-issues).
 
 ### 9.7 Example
 
@@ -417,9 +418,9 @@ become invalid under the new type:
 
 Narrowing, and converting between unrelated type families (e.g. `INT` to
 `DECIMAL`), aren't addressed by this rule and are presumed disallowed for
-now — see "Remaining open details." Targeting one of the 5 automatic
-system columns (§9.2) is a compile-time error, same as §10.3's drop
-restriction.
+now — see [Open Issues](/struoql/design-decisions#open-issues). Targeting
+one of the 5 automatic system columns (§9.2) is a compile-time error,
+same as §10.3's drop restriction.
 
 ### 10.5 Constraints
 
@@ -435,9 +436,10 @@ restriction.
 
   **How this is verified is not yet decided** — checking that one
   arbitrary boolean expression logically implies another is undecidable
-  in general. See "Remaining open details" for the options under
-  consideration (ranging from an unenforced documented convention to a
-  pattern-matched check restricted to simple numeric comparisons).
+  in general. See [Open Issues](/struoql/design-decisions#open-issues)
+  for the options under consideration (ranging from an unenforced
+  documented convention to a pattern-matched check restricted to simple
+  numeric comparisons).
 
 ### 10.6 No Renaming
 
