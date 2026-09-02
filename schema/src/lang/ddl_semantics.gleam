@@ -23,7 +23,7 @@ pub type SemanticError {
   /// (case-insensitive), reserved for future system use — see spec.md
   /// §2 and `is_reserved_name` below.
   ReservedIdentifier(name: String, span: Span)
-  /// `DROP COLUMN`/`ALTER COLUMN TYPE` targeted one of the 4 automatic
+  /// `DROP COLUMN`/`ALTER COLUMN TYPE` targeted one of the 5 automatic
   /// system columns (spec.md §9.2) — never a user's to modify or drop.
   SystemColumnNotModifiable(column: String, span: Span)
   /// §9.4. `span` is the offending `ColumnRef`'s own span, not the
@@ -239,7 +239,7 @@ fn table_constraints(
 /// reserved for future system use (spec.md §2). Checked wherever a
 /// *new* stream/column/constraint name is declared; a mere *reference*
 /// (a `column_ref`, a `RETURNING` item) needs no special handling here —
-/// it either names a real column (one of the 4 automatic system columns
+/// it either names a real column (one of the 5 automatic system columns
 /// included) and resolves normally, or it doesn't and is already an
 /// ordinary `UnknownColumnReference`/`UnknownStream`.
 fn is_reserved_name(name: String) -> Bool {

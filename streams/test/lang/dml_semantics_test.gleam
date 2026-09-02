@@ -79,7 +79,7 @@ fn parse_dml_source(source: String) -> ast.DmlStatement {
 
 /// `s`: `a INT`, `name VARCHAR(64)` (both `NOT NULL`, no default),
 /// `computed INT GENERATED ALWAYS AS (1) STORED`, and a table-level
-/// `CONSTRAINT a_positive CHECK (a > 0)` — plus the 4 automatic system
+/// `CONSTRAINT a_positive CHECK (a > 0)` — plus the 5 automatic system
 /// columns every stream gets (`catalog.create_stream`), not declared
 /// here at all.
 fn base_stream_create() -> dast.DdlStatement {

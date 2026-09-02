@@ -35,13 +35,14 @@ fn named_check(name: String, expr: xast.Expr) -> xast.NamedCheck {
   xast.NamedCheck(name, expr, dummy_span())
 }
 
-/// The 4 system-column names, sorted the same way `sorted_keys` below
+/// The 5 system-column names, sorted the same way `sorted_keys` below
 /// sorts everything else — used as a fixed prefix every `sorted_keys`
 /// assertion below expects, since `create_stream` adds them to every
 /// stream regardless of what it's asked to declare.
 const system_column_names = [
-  catalog.hlc_column_name, catalog.hlc_count_column_name,
-  catalog.hlc_node_id_column_name, catalog.hlc_timestamp_column_name,
+  catalog.created_at_column_name, catalog.hlc_column_name,
+  catalog.hlc_count_column_name, catalog.hlc_node_id_column_name,
+  catalog.hlc_timestamp_column_name,
 ]
 
 fn base_catalog() -> catalog.Catalog {
@@ -95,10 +96,10 @@ pub fn create_stream_produces_the_right_schema_test() {
   assert reading.system == False
 }
 
-/// The 4 fixed system columns (catalog.gleam's own `system_columns()`)
+/// The 5 fixed system columns (catalog.gleam's own `system_columns()`)
 /// are joined onto every stream automatically — `create_stream` never
 /// needs to be told about them, and there's no way to opt out.
-pub fn create_stream_always_adds_the_4_system_columns_test() {
+pub fn create_stream_always_adds_the_5_system_columns_test() {
   let assert Ok(schema) = dict.get(base_catalog().streams, "sensor_reading")
 
   let assert Ok(hlc) = dict.get(schema.columns, catalog.hlc_column_name)
@@ -120,6 +121,13 @@ pub fn create_stream_always_adds_the_4_system_columns_test() {
     dict.get(schema.columns, catalog.hlc_node_id_column_name)
   assert hlc_node_id.data_type == xast.DtInteger
   assert hlc_node_id.system == True
+
+  let assert Ok(created_at) =
+    dict.get(schema.columns, catalog.created_at_column_name)
+  assert created_at.data_type == xast.DtTimestamptz
+  assert created_at.optional == False
+  assert created_at.default == Some(xast.FunctionCall("clock_timestamp", []))
+  assert created_at.system == True
 }
 
 //-----------------------------------------------------------------------------
@@ -143,8 +151,8 @@ pub fn add_column_adds_a_new_column_and_leaves_the_rest_unchanged_test() {
 
   let assert Ok(notes) = dict.get(schema.columns, "notes")
   assert notes.optional == True
-  // 2 original user columns + "notes" + 4 system columns.
-  assert dict.size(schema.columns) == 7
+  // 2 original user columns + "notes" + 5 system columns.
+  assert dict.size(schema.columns) == 8
   assert dict.size(schema.constraints) == 2
 }
 
@@ -185,8 +193,8 @@ pub fn add_constraint_adds_a_new_constraint_test() {
       "units_at_most_64",
       "units_not_empty",
     ]
-  // 2 user columns + 4 system columns, untouched by this action.
-  assert dict.size(schema.columns) == 6
+  // 2 user columns + 5 system columns, untouched by this action.
+  assert dict.size(schema.columns) == 7
 }
 
 pub fn drop_constraint_removes_only_that_constraint_test() {
@@ -199,7 +207,7 @@ pub fn drop_constraint_removes_only_that_constraint_test() {
   let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
 
   assert sorted_keys(schema.constraints) == ["units_not_empty"]
-  assert dict.size(schema.columns) == 6
+  assert dict.size(schema.columns) == 7
 }
 
 pub fn multiple_actions_in_sequence_all_apply_test() {

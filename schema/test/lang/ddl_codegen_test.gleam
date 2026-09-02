@@ -98,6 +98,7 @@ const create_stream_expected = "CREATE TABLE sensor_reading (
   _struo_hlc_timestamp TIMESTAMPTZ NOT NULL,
   _struo_hlc_count INTEGER NOT NULL,
   _struo_hlc_node_id INTEGER NOT NULL,
+  _struo_created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   reading REAL NOT NULL,
   units VARCHAR(32) NOT NULL,
   sensor_id VARCHAR(24) NOT NULL,
@@ -197,8 +198,8 @@ pub fn generate_threads_the_catalog_and_validates_alter_against_it_test() {
     ddl_codegen.generate(catalog.empty(), create_stream_source)
   let assert Ok(schema) =
     dict.get(catalog_after_create.streams, "sensor_reading")
-  // 4 user columns (reading, units, sensor_id, notes) + 4 system columns.
-  assert dict.size(schema.columns) == 8
+  // 4 user columns (reading, units, sensor_id, notes) + 5 system columns.
+  assert dict.size(schema.columns) == 9
 
   let assert Ok(#(_sql2, catalog_after_alter)) =
     ddl_codegen.generate(catalog_after_create, alter_stream_source)
@@ -218,6 +219,7 @@ pub fn a_semicolon_inside_a_string_literal_is_not_a_statement_boundary_test() {
     <> "  _struo_hlc_timestamp TIMESTAMPTZ NOT NULL,\n"
     <> "  _struo_hlc_count INTEGER NOT NULL,\n"
     <> "  _struo_hlc_node_id INTEGER NOT NULL,\n"
+    <> "  _struo_created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),\n"
     <> "  a INTEGER NOT NULL,\n"
     <> "  CONSTRAINT c CHECK (a != 'x;y')\n"
     <> ");\n\n"

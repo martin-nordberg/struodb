@@ -45,14 +45,18 @@ pub type CodegenError {
 /// `next_hlc` draws one fresh HLC value — unlike `schema/ddl_codegen.
 /// generate`, this is not a pure function of `catalog`/`source` alone:
 /// every row actually inserted calls `next_hlc` once, one draw per row
-/// across every statement in `source`, to populate the 4 automatic
-/// system columns (spec.md §9.2). Two calls with identical
-/// `catalog`/`source` but a `next_hlc` returning different values will
-/// render different `_STRUO_HLC...` values. A caller backed by a live
-/// `hlc/clock` actor passes `fn() { clock.next_parts(clock_subject) }`;
-/// taking a plain function here, rather than the actor `Subject`
-/// itself, keeps this module decoupled from `hlc/clock`'s actor-based
-/// implementation and trivial to drive with a canned sequence in tests.
+/// across every statement in `source`, to populate 4 of the 5 automatic
+/// system columns (spec.md §9.2) — the HLC-derived ones. Two calls with
+/// identical `catalog`/`source` but a `next_hlc` returning different
+/// values will render different `_STRUO_HLC...` values. A caller backed
+/// by a live `hlc/clock` actor passes
+/// `fn() { clock.next_parts(clock_subject) }`; taking a plain function
+/// here, rather than the actor `Subject` itself, keeps this module
+/// decoupled from `hlc/clock`'s actor-based implementation and trivial
+/// to drive with a canned sequence in tests. The 5th system column,
+/// `_struo_created_at`, is never rendered here at all — its
+/// `DEFAULT clock_timestamp()` (`schema/ddl_codegen.gleam`) is what
+/// populates it, so there's nothing for `generate` to draw for it.
 pub fn generate(
   catalog: Catalog,
   source: String,
@@ -114,9 +118,13 @@ fn render_all(
 // INSERT -> INSERT INTO
 //-----------------------------------------------------------------------------
 
-/// The 4 system column names, in the fixed order `catalog.gleam` also
-/// uses for `create_stream` — leading every rendered column/value list,
-/// ahead of the statement's own `columns`/row values.
+/// The 4 system column names actually written into a generated `INSERT`
+/// — a prefix of `catalog.system_columns()`'s full 5, in the same fixed
+/// order, leading every rendered column/value list ahead of the
+/// statement's own `columns`/row values. `_struo_created_at`, the 5th,
+/// is deliberately excluded: its value comes from the table's own
+/// `DEFAULT clock_timestamp()`, never from generated `INSERT` text — see
+/// `generate`'s doc comment above.
 const system_column_names = [
   catalog.hlc_column_name, catalog.hlc_timestamp_column_name,
   catalog.hlc_count_column_name, catalog.hlc_node_id_column_name,

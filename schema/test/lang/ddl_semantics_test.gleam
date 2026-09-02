@@ -63,7 +63,7 @@ fn parse_source(source: String) -> ast.DdlStatement {
 
 /// `s`: `a INT`, `name VARCHAR(64)` (both `NOT NULL`, no default),
 /// `computed INT GENERATED ALWAYS AS (1) STORED`, and a table-level
-/// `CONSTRAINT a_positive CHECK (a > 0)` — plus the 4 automatic system
+/// `CONSTRAINT a_positive CHECK (a > 0)` — plus the 5 automatic system
 /// columns every stream gets (`catalog.create_stream`), not declared
 /// here at all.
 fn base_stream_create() -> ast.DdlStatement {
@@ -469,9 +469,9 @@ pub fn create_stream_example_analyzes_clean_test() {
   let assert Ok(cat) =
     ddl_semantics.analyze(catalog.empty(), parse_source(create_stream_example))
   let assert Ok(schema) = dict.get(cat.streams, "sensor_reading")
-  // The 4 user columns (reading, units, sensor_id, notes) plus the 4
+  // The 4 user columns (reading, units, sensor_id, notes) plus the 5
   // automatic system columns every stream gets.
-  assert dict.size(schema.columns) == 8
+  assert dict.size(schema.columns) == 9
   assert dict.has_key(schema.columns, catalog.hlc_column_name)
   assert dict.size(schema.constraints) == 1
 }

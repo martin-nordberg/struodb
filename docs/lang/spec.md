@@ -645,7 +645,7 @@ not yet constrained — see "Remaining open details."
 ### 9.2 The Automatic System Columns
 
 `HLC` is not a data type, and `CREATE STREAM` never declares a primary
-key column at all. Instead, every stream automatically gets 4 columns —
+key column at all. Instead, every stream automatically gets 5 columns —
 none written in `CREATE STREAM`, none in `column_def`'s `data_type`
 grammar — prepended ahead of whatever the statement itself declares:
 
@@ -655,6 +655,7 @@ grammar — prepended ahead of whatever the statement itself declares:
 | `_struo_hlc_timestamp`   | `TIMESTAMPTZ` | The HLC's embedded physical-time field, as a real timestamp. |
 | `_struo_hlc_count`       | `INTEGER`     | The HLC's embedded logical counter. |
 | `_struo_hlc_node_id`     | `INTEGER`     | The HLC's embedded node id, decoded from base-62 to its integer value. |
+| `_struo_created_at`      | `TIMESTAMPTZ` | The wall-clock UTC moment PostgreSQL actually inserts the row. |
 
 Lower case, like every other unquoted identifier (§2) — these are never
 written in source at all, so there's no "user typed it uppercase" case to
@@ -663,16 +664,28 @@ it quoted for no functional reason, and would force a client to quote it
 too when referencing it (e.g. in `RETURNING`) to avoid its own unquoted
 spelling folding away from the catalog's exact-case key.
 
-All 4 are `NOT NULL` (`_struo_hlc` via `PRIMARY KEY`, same as before; the
-other 3 explicitly). This reverts to something like the *original*
+All 5 are `NOT NULL` (`_struo_hlc` via `PRIMARY KEY`, same as before; the
+other 4 explicitly). The first 4 revert to something like the *original*
 design this spec once described and then moved away from (an implicit,
 reserved, system-populated column) — except now split into 4 columns
 instead of 1, and populated by the codegen layer itself rather than by
 the client typing a value into `INSERT`: `INSERT` (§11) never accepts a
-value for any of them, the same way it never accepts one for a
-`GENERATED` column (§11.4) — every actual value comes from a live HLC
-clock instance passed to codegen at generation time, one fresh draw per
-row inserted.
+value for any of the 5, the same way it never accepts one for a
+`GENERATED` column (§11.4) — but the 5 don't all get their actual value
+the same way. The 4 HLC-derived columns come from a live HLC clock
+instance passed to codegen at generation time, one fresh draw per row
+inserted, and are written into the generated `INSERT` text explicitly.
+`_struo_created_at` is different: it's simply left out of the generated
+`INSERT`'s column list entirely, exactly like an ordinary column with a
+`DEFAULT` and no value supplied (§11.3) — its value comes from the
+column's own `DEFAULT clock_timestamp()`, rendered once in `CREATE
+STREAM`'s transpiled `CREATE TABLE` (§9.7), so PostgreSQL itself fills it
+in at the moment it actually inserts the row, not the client/codegen
+layer. This is deliberately a separate value from `_struo_hlc_timestamp`:
+that one is the HLC's own causality-ordering clock, which — per
+`docs/hlc/spec.md`'s merge rule — can run ahead of true wall-clock time
+after a node merges in a remote clock reading; `_struo_created_at` is
+always PostgreSQL's own unadjusted idea of "now."
 
 A node's clock producing a duplicate HLC value is misbehaving (HLC values
 must be unique per `docs/hlc/spec.md`'s node-ID discipline); the
@@ -683,7 +696,7 @@ logic is needed.
 
 **Reserved namespace.** No stream, column, or constraint name may be
 *declared* starting with `_STRUO_`, case-insensitively (§2) — reserved
-for these 4 columns and future system use. A stream may still
+for these 5 columns and future system use. A stream may still
 *reference* one of them (e.g. `RETURNING _struo_hlc`) exactly like any
 other real column.
 
@@ -763,7 +776,7 @@ CREATE STREAM sensor_reading (
 
 (This corrects one thing from the original working draft: `FLOAT` →
 `REAL`, since `FLOAT` isn't a data type keyword (§3.1). The transpiled
-table also carries the 4 automatic system columns of §9.2, not written
+table also carries the 5 automatic system columns of §9.2, not written
 here at all.)
 
 ## 10. ALTER STREAM
@@ -813,7 +826,7 @@ rule (§2) as `CREATE STREAM`'s own columns.
 ### 10.3 Dropping Columns
 
 `DROP COLUMN column_name` removes a column, allowed **only if the column
-is `OPTIONAL`** — a `NOT NULL` column may not be dropped. None of the 4
+is `OPTIONAL`** — a `NOT NULL` column may not be dropped. None of the 5
 automatic system columns (§9.2) may ever be dropped, `OPTIONAL` or not —
 a **compile-time error** distinct from (and checked ahead of) the
 `OPTIONAL` rule, since the real reason is "not yours to drop," not
@@ -838,7 +851,7 @@ become invalid under the new type:
 
 Narrowing, and converting between unrelated type families (e.g. `INT` to
 `DECIMAL`), aren't addressed by this rule and are presumed disallowed for
-now — see "Remaining open details." Targeting one of the 4 automatic
+now — see "Remaining open details." Targeting one of the 5 automatic
 system columns (§9.2) is a compile-time error, same as §10.3's drop
 restriction.
 
@@ -927,10 +940,13 @@ The list may still be a **subset** of the stream's columns — any column
 left out is resolved the same way a bare `DEFAULT` value would be
 (§11.3): its own `DEFAULT`/`GENERATED` clause if it has one, `NULL` if
 it's `OPTIONAL` with neither, or an insert-time error if it's `NOT NULL`
-with neither. The 4 automatic system columns (§9.2) may **never** appear
+with neither. The 5 automatic system columns (§9.2) may **never** appear
 in the column list at all — the same restriction §11.4 states for
-`GENERATED` columns — so they're always "left out," and always resolve to
-that row's freshly-drawn HLC value rather than any insert-time error.
+`GENERATED` columns — so they're always "left out," and never hit that
+insert-time error: 4 of them resolve to that row's freshly-drawn HLC
+value; the 5th, `_struo_created_at`, resolves to its own `DEFAULT
+clock_timestamp()` exactly like an ordinary `DEFAULT` column left out of
+the list.
 
 ### 11.3 Values
 
@@ -954,10 +970,13 @@ generated columns from the column list entirely, since they're never
 something an `INSERT` supplies — they're always computed from the row
 being inserted.
 
-The 4 automatic system columns (§9.2) are excluded from the column list
-the same way, for the same reason: their values are never client-supplied
-— codegen draws a fresh HLC value per row from a live clock instance
-and fills them in itself.
+The 5 automatic system columns (§9.2) are excluded from the column list
+the same way, for the same reason: their values are never
+client-supplied. 4 of them, codegen draws a fresh HLC value per row from
+a live clock instance and fills them in itself; the 5th,
+`_struo_created_at`, is left for PostgreSQL to fill in via its own
+`DEFAULT clock_timestamp()`, the same as any other omitted `DEFAULT`
+column (§11.2).
 
 ### 11.5 Conflict Handling
 
@@ -1001,7 +1020,7 @@ ON CONFLICT DO NOTHING
 RETURNING _struo_hlc;
 ```
 
-(The 4 automatic system columns are correctly omitted from the column
+(The 5 automatic system columns are correctly omitted from the column
 list per §11.4; `_struo_hlc` reads back the value codegen actually
 assigned this row via `RETURNING`, per §11.6. `notes`, `OPTIONAL` with no
 `DEFAULT`, is omitted
@@ -1031,6 +1050,16 @@ above can be read in context and aren't re-litigated later:
   instance rather than typed by the client into `INSERT` — is this
   bullet.) Any stream/column/constraint name starting with `_STRUO_` is
   reserved and rejected at declaration time — see §2.
+- **A 5th automatic system column, `_struo_created_at TIMESTAMPTZ NOT
+  NULL`, holds the wall-clock UTC moment PostgreSQL actually inserts the
+  row** — added after the 4 `_struo_hlc...` columns above, and populated
+  differently from them: rather than a value codegen draws from a live
+  HLC clock and writes into the generated `INSERT`, it's left out of the
+  `INSERT` entirely and comes from the column's own
+  `DEFAULT clock_timestamp()`, evaluated by PostgreSQL itself at insert
+  time. Deliberately distinct from `_struo_hlc_timestamp`, which is the
+  HLC's own causality clock and can run ahead of true wall-clock time
+  after a merge — see §9.2.
 - **`NOT NULL` by default; `OPTIONAL` for nullable; explicit `NOT NULL` is
   a compile-time error.** A deliberate inversion of PostgreSQL's own
   default — see §9.3.
@@ -1087,11 +1116,12 @@ above can be read in context and aren't re-litigated later:
 - **`INSERT`'s column list is mandatory**, unlike standard SQL's
   positional form — self-documenting and immune to `ALTER STREAM`
   reordering columns. See §11.2.
-- **`GENERATED` and the 4 automatic system columns are excluded from the
+- **`GENERATED` and the 5 automatic system columns are excluded from the
   `INSERT` column list entirely** — simpler than PostgreSQL's
   DEFAULT-only carve-out for `GENERATED`; the system columns are never
-  client-supplied at all, drawn instead from a live HLC clock instance
-  passed to codegen, one draw per row. See §11.4.
+  client-supplied at all. 4 are drawn from a live HLC clock instance
+  passed to codegen, one draw per row; the 5th, `_struo_created_at`, is
+  left to its own table-level `DEFAULT clock_timestamp()`. See §11.4.
 - **`INSERT` gains a built-in `ON CONFLICT DO NOTHING`**, with no conflict
   target needed since a stream has exactly one possible source of
   conflict (its `_struo_hlc` primary key); there is no `DO UPDATE` form,

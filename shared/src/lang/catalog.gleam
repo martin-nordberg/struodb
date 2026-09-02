@@ -3,7 +3,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import lang/expr_ast.{
   type DataType, type Expr, type GeneratedClause, type NamedCheck, DtChar,
-  DtInteger, DtTimestamptz,
+  DtInteger, DtTimestamptz, FunctionCall,
 }
 
 //-----------------------------------------------------------------------------
@@ -49,7 +49,7 @@ pub type ColumnSchema {
     optional: Bool,
     default: Option(Expr),
     generated: Option(GeneratedClause),
-    /// `True` for exactly the 4 fixed `_STRUO_`-prefixed columns
+    /// `True` for exactly the 5 fixed `_STRUO_`-prefixed columns
     /// `system_columns()` below adds to every stream — never settable by
     /// anything derived from a parsed `ddl_ast`. Lets `dml_semantics`
     /// (streams/) exclude these from an `INSERT`'s column list the same
@@ -66,7 +66,7 @@ pub fn empty() -> Catalog {
 }
 
 //-----------------------------------------------------------------------------
-// The 4 automatic system columns every stream gets, regardless of what
+// The 5 automatic system columns every stream gets, regardless of what
 // `CREATE STREAM` itself declares — see "The StruoDB query language
 // front end" in CLAUDE.md and docs/lang/spec.md §9.2. Defined once, here,
 // since `ddl_codegen.gleam` (schema/) needs these same names/types to
@@ -74,7 +74,10 @@ pub fn empty() -> Catalog {
 // (streams/) needs them to render an `INSERT`'s extra column list —
 // keeping a single source of truth for "what are they called, in what
 // order" is what lets both packages stay in lockstep without one
-// depending on the other.
+// depending on the other. `_struo_created_at` is the one exception to
+// "codegen renders it": its value is never written by generated `INSERT`
+// text at all, only by its own `DEFAULT clock_timestamp()` here — see its
+// own doc comment below.
 //-----------------------------------------------------------------------------
 
 /// The whole encoded HLC value (see docs/hlc/spec.md) — a fixed 15
@@ -96,9 +99,22 @@ pub const hlc_count_column_name = "_struo_hlc_count"
 /// The HLC's embedded node id, decoded from base-62 to its integer value.
 pub const hlc_node_id_column_name = "_struo_hlc_node_id"
 
-/// The 4 system columns, in the fixed order they're always rendered:
-/// leading every `CREATE TABLE`'s column list and every generated
-/// `INSERT`'s column list alike.
+/// The wall-clock UTC moment PostgreSQL actually inserts the row, via
+/// this column's own `DEFAULT clock_timestamp()` (rendered by
+/// `ddl_codegen.gleam`) — unlike the 4 HLC-derived columns above, never
+/// written by generated `INSERT` text (`dml_codegen.gleam` leaves it out
+/// of the column list entirely, same as any other `DEFAULT`-only
+/// column). Distinct in purpose from `hlc_timestamp_column_name`: that
+/// one is the HLC's own causality-ordering clock, which can run ahead of
+/// true wall-clock time after merging a remote node's clock (see
+/// docs/hlc/spec.md); this one is a plain audit timestamp, always
+/// PostgreSQL's own idea of "now."
+pub const created_at_column_name = "_struo_created_at"
+
+/// The 5 system columns, in the fixed order they're always rendered:
+/// leading every `CREATE TABLE`'s column list, and — `_struo_created_at`
+/// excepted, see its own doc comment above — every generated `INSERT`'s
+/// column list too.
 pub fn system_columns() -> List(ColumnSchema) {
   [
     ColumnSchema(
@@ -133,6 +149,14 @@ pub fn system_columns() -> List(ColumnSchema) {
       generated: None,
       system: True,
     ),
+    ColumnSchema(
+      name: created_at_column_name,
+      data_type: DtTimestamptz,
+      optional: False,
+      default: Some(FunctionCall("clock_timestamp", [])),
+      generated: None,
+      system: True,
+    ),
   ]
 }
 
@@ -141,7 +165,7 @@ pub fn system_columns() -> List(ColumnSchema) {
 //-----------------------------------------------------------------------------
 
 /// Declares a new stream named `name`, with `columns` (a caller-supplied,
-/// user-declared list) automatically joined by the 4 fixed
+/// user-declared list) automatically joined by the 5 fixed
 /// `system_columns()` above. Callers (`ddl_semantics.gleam`) are expected
 /// to have already validated the `CreateStream` producing these arguments
 /// and to call this only once that has come back `Ok` — this function

@@ -125,11 +125,16 @@ pub fn create_stream_to_sql(stmt: ast.DdlStatement) -> String {
   <> "\n);"
 }
 
-/// The 4 automatic system columns (catalog.gleam's `system_columns()`),
+/// The 5 automatic system columns (catalog.gleam's `system_columns()`),
 /// rendered exactly once here — every stream gets these regardless of
 /// what `CREATE STREAM` itself declares (spec.md §9.2). `_STRUO_HLC`
 /// omits an explicit `NOT NULL` the same way a `PRIMARY KEY` column
 /// always has, below, since `PRIMARY KEY` already implies it.
+/// `_struo_created_at` is the one column here with a `DEFAULT`: unlike
+/// the other 4, `dml_codegen.gleam` never writes it into a generated
+/// `INSERT` at all, so `DEFAULT clock_timestamp()` — PostgreSQL's own
+/// "now," evaluated at actual insert time — is what actually populates
+/// it.
 fn system_column_lines() -> List(String) {
   [
     expr_codegen.quote_identifier(catalog.hlc_column_name)
@@ -148,6 +153,11 @@ fn system_column_lines() -> List(String) {
       <> " "
       <> expr_codegen.data_type_to_sql(xast.DtInteger)
       <> " NOT NULL",
+    expr_codegen.quote_identifier(catalog.created_at_column_name)
+      <> " "
+      <> expr_codegen.data_type_to_sql(xast.DtTimestamptz)
+      <> " NOT NULL DEFAULT "
+      <> expr_codegen.expr_to_sql(xast.FunctionCall("clock_timestamp", [])),
   ]
 }
 

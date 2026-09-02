@@ -139,6 +139,17 @@ final shape, not a stopgap.
   states the encoding is fixed-width, 15 characters, "chosen specifically
   so the value fits a PostgreSQL `char(15)` column with no padding" —
   `_struo_hlc CHAR(15)` is that decision cashed in, not a new one.
+- **A 5th automatic system column, `_struo_created_at`, is rendered as a
+  5th fixed line — `TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()`** —
+  after the 4 `_struo_hlc*` lines above, but populated differently:
+  `dml_codegen`'s `INSERT` rendering (below) never writes it at all, so
+  its `DEFAULT` is what actually assigns the value, evaluated by
+  PostgreSQL itself at insert time rather than drawn from a live clock
+  instance passed to codegen (spec.md §9.2). The `DEFAULT` expression is
+  `catalog.gleam`'s own `system_columns()` entry for it
+  (`FunctionCall("clock_timestamp", [])`), rendered through the same
+  `expr_codegen.expr_to_sql` any other column's `DEFAULT` goes through —
+  not a one-off hardcoded string.
 - **`dml_codegen`'s `INSERT` rendering draws one fresh HLC value per row,
   not per statement** — `clock.next_parts` (`hlc/clock.gleam`) is called
   once for every row across every `INSERT` in the source, in row order,
