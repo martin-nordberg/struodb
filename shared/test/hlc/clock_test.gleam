@@ -4,7 +4,8 @@ import gleam/list
 import gleam/order
 import gleam/string
 import hlc/base62
-import hlc/clock.{InvalidFormat, InvalidLength}
+import hlc/clock
+import hlc/clock_state.{InvalidFormat, InvalidLength}
 import support
 
 //-----------------------------------------------------------------------------

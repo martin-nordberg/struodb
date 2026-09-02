@@ -111,9 +111,19 @@ Implements the algorithm in `docs/hlc/spec.md`: each clock value is a
 15-character, base-62-encoded, lexicographically-sortable string
 (8 chars physical-time-ms, 2 chars logical counter, 5 chars caller-assigned
 node ID) sized to fit a PostgreSQL `char(15)` with no padding. `base62.gleam`
-is the pure encode/decode; `clock.gleam` holds the per-node
-`(time, counter, node_id)` state machine (`next()` for local events,
-`receive()` on incoming messages per the spec's merge rule). The
+is the pure encode/decode; `clock_state.gleam` holds the per-node
+`(time, counter, node_id)` state machine itself (`next()`/`next_parts()`
+for local events, `merge()` on an incoming remote value per the spec's
+merge rule) as plain functions over an opaque `ClockState` — no actor, no
+`gleam/erlang`/`gleam/otp` dependency at all. `clock.gleam` is a thin
+actor wrapper around it: it owns one `ClockState` as its own actor state
+and, on every `ClockMessage`, calls straight through to
+`clock_state.next`/`next_parts`/`merge` for the next state and reply
+value. The split exists so a caller that only needs `HlcParts`/the state
+machine (e.g. `streams/lang/dml_codegen.gleam`) can depend on
+`clock_state.gleam` alone, without pulling in `gleam_otp`/`gleam_erlang`
+— packages with no JavaScript-target support at all, which matters if
+StruoDB ever needs a non-BEAM target. The
 lexicographic-order-equals-value-order invariant (fixed-width, zero-padded
 fields; monotonic alphabet) is load-bearing — any change to field widths or
 the alphabet breaks it.

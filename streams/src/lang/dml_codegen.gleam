@@ -4,7 +4,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/string_tree
-import hlc/clock
+import hlc/clock_state
 import lang/catalog.{type Catalog}
 import lang/dml_ast as ast
 import lang/dml_parser
@@ -53,14 +53,18 @@ pub type CodegenError {
 /// `fn() { clock.next_parts(clock_subject) }`; taking a plain function
 /// here, rather than the actor `Subject` itself, keeps this module
 /// decoupled from `hlc/clock`'s actor-based implementation and trivial
-/// to drive with a canned sequence in tests. The 5th system column,
-/// `_struo_created_at`, is never rendered here at all — its
-/// `DEFAULT clock_timestamp()` (`schema/ddl_codegen.gleam`) is what
-/// populates it, so there's nothing for `generate` to draw for it.
+/// to drive with a canned sequence in tests — and is why this module
+/// depends on `hlc/clock_state` (the pure `HlcParts` shape and state
+/// machine) rather than `hlc/clock` (the actor wrapper around it): this
+/// module has no actor of its own to talk to, only values `next_hlc`
+/// hands it. The 5th system column, `_struo_created_at`, is never
+/// rendered here at all — its `DEFAULT clock_timestamp()`
+/// (`schema/ddl_codegen.gleam`) is what populates it, so there's nothing
+/// for `generate` to draw for it.
 pub fn generate(
   catalog: Catalog,
   source: String,
-  next_hlc: fn() -> clock.HlcParts,
+  next_hlc: fn() -> clock_state.HlcParts,
 ) -> Result(#(String, Catalog), CodegenError) {
   use tokens <- result.try(
     lexer.tokenize(source) |> result.map_error(LexFailure),
@@ -80,7 +84,7 @@ pub fn generate(
 /// `Catalog` (e.g. one `schema/ddl_codegen.generate` already produced).
 pub fn generate_standalone(
   source: String,
-  next_hlc: fn() -> clock.HlcParts,
+  next_hlc: fn() -> clock_state.HlcParts,
 ) -> Result(String, CodegenError) {
   use #(sql, _catalog) <- result.try(generate(catalog.empty(), source, next_hlc))
   Ok(sql)
@@ -103,7 +107,7 @@ fn validate_all(
 
 fn render_all(
   statements: List(ast.DmlStatement),
-  next_hlc: fn() -> clock.HlcParts,
+  next_hlc: fn() -> clock_state.HlcParts,
 ) -> String {
   statements
   |> list.map(fn(stmt) {
@@ -132,7 +136,7 @@ const system_column_names = [
 
 pub fn insert_to_sql(
   stmt: ast.DmlStatement,
-  next_hlc: fn() -> clock.HlcParts,
+  next_hlc: fn() -> clock_state.HlcParts,
 ) -> String {
   let ast.Insert(
     stream_name:,
@@ -163,7 +167,7 @@ pub fn insert_to_sql(
   <> ";"
 }
 
-fn row_to_sql(row: List(ast.Value), parts: clock.HlcParts) -> String {
+fn row_to_sql(row: List(ast.Value), parts: clock_state.HlcParts) -> String {
   let values =
     list.append(system_values_to_sql(parts), list.map(row, value_to_sql))
   "(" <> string.join(values, ", ") <> ")"
@@ -177,7 +181,7 @@ fn row_to_sql(row: List(ast.Value), parts: clock.HlcParts) -> String {
 /// physical time is turned into SQL text via plain integer arithmetic on
 /// `physical_time_ms` (whole seconds `.` zero-padded milliseconds), with
 /// no float round-tripping involved.
-fn system_values_to_sql(parts: clock.HlcParts) -> List(String) {
+fn system_values_to_sql(parts: clock_state.HlcParts) -> List(String) {
   [
     expr_codegen.quote_string_literal(parts.encoded),
     "to_timestamp(" <> seconds_literal(parts.physical_time_ms) <> ")",

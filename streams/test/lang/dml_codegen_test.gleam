@@ -3,6 +3,7 @@ import gleam/int
 import gleam/option.{None, Some}
 import gleam/string
 import hlc/clock.{type ClockMessage}
+import hlc/clock_state
 import lang/catalog
 import lang/ddl_parser
 import lang/ddl_semantics
@@ -39,7 +40,7 @@ fn col_ref(name: String) -> xast.Expr {
 //-----------------------------------------------------------------------------
 // A deterministic clock for exact-string assertions: fixed `now`, so
 // every `next()`/`next_parts()` draw advances only the counter, never
-// the physical time — see `hlc/clock.gleam`'s own `advance`. Two
+// the physical time — see `hlc/clock_state.gleam`'s own `advance`. Two
 // independently-started clocks with the same node id and `now` tick in
 // lockstep, so a test can call `next_parts` on a second, "expected"
 // clock the same number of times, in the same order, that
@@ -59,7 +60,9 @@ fn test_clock() -> Subject(ClockMessage) {
 /// The `fn() -> HlcParts` shape `dml_codegen` actually takes, backed by
 /// a real clock actor — mirrors how a production caller would close over
 /// `clock.next_parts(clock_subject)`.
-fn next_hlc(from subject: Subject(ClockMessage)) -> fn() -> clock.HlcParts {
+fn next_hlc(
+  from subject: Subject(ClockMessage),
+) -> fn() -> clock_state.HlcParts {
   fn() { clock.next_parts(subject) }
 }
 
@@ -67,7 +70,7 @@ fn next_hlc(from subject: Subject(ClockMessage)) -> fn() -> clock.HlcParts {
 /// rendering, so expected strings below are built from the same
 /// public building blocks the real codegen uses, not duplicated
 /// base-62/formatting logic.
-fn system_values_sql(parts: clock.HlcParts) -> String {
+fn system_values_sql(parts: clock_state.HlcParts) -> String {
   expr_codegen.quote_string_literal(parts.encoded)
   <> ", to_timestamp("
   <> seconds_literal(parts.physical_time_ms)
@@ -105,7 +108,7 @@ fn insert_example() -> ast.DmlStatement {
 }
 
 /// The one row above draws exactly one `next_parts`.
-fn insert_expected_sql(parts: clock.HlcParts) -> String {
+fn insert_expected_sql(parts: clock_state.HlcParts) -> String {
   "INSERT INTO sensor_reading (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, reading, units, sensor_id)\nVALUES\n  ("
   <> system_values_sql(parts)
   <> ", 42.5, 'celsius', 'sensor-001')\nON CONFLICT DO NOTHING\nRETURNING _struo_hlc;"
