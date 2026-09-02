@@ -1,3 +1,4 @@
 [tools]
+bun = "1.4.0"
 erlang = "29"
 gleam = "1.18"
