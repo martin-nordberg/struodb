@@ -10,9 +10,9 @@ way spec.md accumulates its own "Remaining open details."
 layout"/per-module sections below still read, as if `lang/` were one
 `src/lang/` under a single package. It isn't, as built: expression parsing
 plus `GeneratedClause`/`NamedCheck`/`Catalog` (`token`/`lexer`/`expr_ast`/
-`expr_parser`/`token_stream`/`catalog`) live in `shared/`, reused by
-`ddl_ast`/`ddl_parser`/`ddl_semantics` in `schema/` (CREATE/ALTER STREAM)
-and by `dml_ast`/`dml_parser`/`dml_semantics` in `streams/` (INSERT) —
+`expr_parser`/`token_stream`/`catalog`) live in `../../../shared`, reused by
+`ddl_ast`/`ddl_parser`/`ddl_semantics` in `../../../schema` (CREATE/ALTER STREAM)
+and by `dml_ast`/`dml_parser`/`dml_semantics` in `../../../streams` (INSERT) —
 see CLAUDE.md's "The StruoDB query language front end" for the current
 physical layout and why the split happened where it did. The design
 decisions and per-check reasoning below are all still accurate; only file
@@ -177,15 +177,15 @@ facade module (no `src/lang.gleam` in any of the three packages): callers
 `util/hlc/*` and `util/asyncio/*` are imported today.
 
 **`catalog.gleam`'s two moves**: it started (like everything else here)
-in a single `src/lang/`, migrated to `schema/src/lang/` once the package
+in a single `src/lang/`, migrated to `../../../schema/src/lang` once the package
 split landed (next to the `ddl_ast.gleam` types its `apply_statement`
-operated on directly), and then moved back to `shared/src/lang/` once a
+operated on directly), and then moved back to `../../../shared/src/lang` once a
 review decoupled it from `ddl_ast` entirely — see its own section below
 and "Open questions" for why the schema-only stop wasn't the end state.
 
 ---
 
-## `shared/src/lang/token.gleam`
+## `../../../shared/src/lang/token.gleam`
 
 Pure data, no logic beyond maybe an `Eq`-friendly shape (Gleam gives that
 for free on records/unions).
@@ -301,7 +301,7 @@ wrote, without needing a `Span`-based workaround to recover it later.
 
 ---
 
-## `shared/src/lang/lexer.gleam`
+## `../../../shared/src/lang/lexer.gleam`
 
 ```gleam
 pub type LexError {
@@ -449,27 +449,27 @@ not something worth generating dynamically.
 
 ---
 
-## `shared/src/lang/expr_ast.gleam`, `schema/src/lang/ddl_ast.gleam`, `streams/src/lang/dml_ast.gleam`
+## `../../../shared/src/lang/expr_ast.gleam`, `../../../schema/src/lang/ddl_ast.gleam`, `../../../streams/src/lang/dml_ast.gleam`
 
 As planned, one `ast.gleam` held every type below. As built, it split
 along the same line as everything else in this doc's "package layout"
 note: `DataType`/`Expr`/`UnaryOperator`/`BinaryOperator` — reused by both
-statement families — live in `shared/src/lang/expr_ast.gleam`; the
-`CREATE`/`ALTER STREAM`-only shapes live in `schema/src/lang/ddl_ast.gleam`
+statement families — live in `../../../shared/src/lang/expr_ast.gleam`; the
+`CREATE`/`ALTER STREAM`-only shapes live in `../../../schema/src/lang/ddl_ast.gleam`
 (and `Statement` is now `DdlStatement`, holding only `CreateStream`/
 `AlterStream` — no `Insert` case); the `INSERT`-only shapes live in
-`streams/src/lang/dml_ast.gleam` (as `DmlStatement`, holding only
+`../../../streams/src/lang/dml_ast.gleam` (as `DmlStatement`, holding only
 `Insert`). `ddl_ast.gleam` imports `expr_ast.gleam` (`as xast`, by
 convention) for `DataType`/`Expr`; so does `dml_ast.gleam`.
 
 `GeneratedClause`/`GeneratedStorage`/`NamedCheck` — originally planned as
 part of `ast.gleam`'s `CREATE`/`ALTER STREAM` shapes below — also ended
 up in `expr_ast.gleam` rather than `ddl_ast.gleam`, even though nothing
-in `streams/`'s `INSERT` grammar uses them: `catalog.gleam`'s
+in `../../../streams`'s `INSERT` grammar uses them: `catalog.gleam`'s
 `StreamSchema`/`ColumnSchema` (below) need the same shape to *store* a
 generated-column clause or a named `CHECK`, and `catalog.gleam` lives in
-`shared/` (see its own section) — so these three types had to live
-somewhere reachable from both `shared/` and `schema/`, and `expr_ast.
+`../../../shared` (see its own section) — so these three types had to live
+somewhere reachable from both `../../../shared` and `../../../schema`, and `expr_ast.
 gleam` (small wrappers around one `Expr`, already imported everywhere)
 was the natural fit over inventing a fourth module.
 
@@ -660,7 +660,7 @@ pub type ReturningItem {
 
 ---
 
-## `shared/src/lang/expr_parser.gleam`
+## `../../../shared/src/lang/expr_parser.gleam`
 
 ```gleam
 // shared/src/lang/expr_parser.gleam
@@ -677,13 +677,13 @@ on `CREATE`/`ALTER`/`INSERT`. As built, `ParseError` and the whole
 expression/`data_type` grammar below live once, in `expr_parser.gleam`,
 but `pub fn parse` itself doesn't — each statement family owns its own:
 `ddl_parser.parse(tokstrm) -> Result(DdlStatement, ParseError)` (dispatch
-on `CREATE`/`ALTER`) in `schema/`, `dml_parser.parse(tokstrm) ->
-Result(DmlStatement, ParseError)` (dispatch on `INSERT`) in `streams/` —
+on `CREATE`/`ALTER`) in `../../../schema`, `dml_parser.parse(tokstrm) ->
+Result(DmlStatement, ParseError)` (dispatch on `INSERT`) in `../../../streams` —
 each `import`s `expr_parser.{type ParseError, ...}` (`as ep`, by
 convention) both for the error type and to call into the precedence-layered
 functions below for every expression/`data_type` they parse. Every
 `parse_*` function actually takes/returns a `token_stream.TokenStream`
-(`shared/src/lang/token_stream.gleam`'s cursor type — `peek_kind`/
+(`../../../shared/src/lang/token_stream.gleam`'s cursor type — `peek_kind`/
 `peek_keyword`/`current`/`advance`), not a raw `List(Token)`, wrapped once
 via `token_stream.new` at the top of whichever `parse` a caller calls.
 
@@ -800,7 +800,7 @@ name, the same treatment (a `span` field on that one variant only) can
 be added later without disturbing the other variants or their existing
 parser/test code.
 
-### Statement parsers (`schema/src/lang/ddl_parser.gleam`, `streams/src/lang/dml_parser.gleam`)
+### Statement parsers (`../../../schema/src/lang/ddl_parser.gleam`, `../../../streams/src/lang/dml_parser.gleam`)
 
 `parse_create_stream`/`parse_alter_stream` live in `ddl_parser.gleam`;
 `parse_insert` lives in `dml_parser.gleam` — each package's `pub fn parse`
@@ -859,20 +859,20 @@ straightforward to parse from:
 
 ---
 
-## `shared/src/lang/catalog.gleam`
+## `../../../shared/src/lang/catalog.gleam`
 
 As planned, and as first built once the package split landed, this
 module's one `apply_statement(catalog, stmt: DdlStatement) -> Catalog`
 operated directly on `ddl_ast`'s `DdlStatement`/`StreamElement`/
-`AlterAction` types — which put `catalog.gleam` in `schema/`, next to
-`ddl_ast.gleam`, and forced `streams/` to depend on the whole `schema`
+`AlterAction` types — which put `catalog.gleam` in `../../../schema`, next to
+`ddl_ast.gleam`, and forced `../../../streams` to depend on the whole `schema`
 package (its DDL parser and semantics included) just to read/write a
 `Catalog` for `INSERT` validation. A later review decoupled it: instead
 of one function taking a whole `DdlStatement`, this module now exposes
 one small primitive per kind of change, each taking only the shared types
 (`ColumnSchema`, `NamedCheck` — the latter from `expr_ast.gleam`) it
 actually needs, with no `ddl_ast` import at all. That's what lets it live
-in `shared/` — reachable from `streams/` at no extra dependency cost,
+in `../../../shared` — reachable from `../../../streams` at no extra dependency cost,
 since every package already depends on `shared`.
 
 ```gleam
@@ -946,7 +946,7 @@ section below.
 
 ---
 
-## `shared/src/lang/expr_semantics.gleam`
+## `../../../shared/src/lang/expr_semantics.gleam`
 
 Not in the original plan as a module of its own — as first built (once
 the package split landed), `ddl_semantics.gleam` and `dml_semantics.
@@ -987,7 +987,7 @@ to apply them to.
 
 ---
 
-## `schema/src/lang/ddl_semantics.gleam`, `streams/src/lang/dml_semantics.gleam`
+## `../../../schema/src/lang/ddl_semantics.gleam`, `../../../streams/src/lang/dml_semantics.gleam`
 
 As planned, one `semantic.gleam` held one `SemanticError` type covering
 `CreateStream`/`AlterStream`/`Insert` together and one `analyze`. As
@@ -1000,7 +1000,7 @@ review pruned that copy down to just the eight variants below.
 `collect_column_refs`/`check_expr_column_refs`, the `Expr`-walking
 helpers both modules' checks are built on, went through the same
 history: copy-pasted verbatim into both at first, then moved into
-`shared/src/lang/expr_semantics.gleam` once a review noticed neither
+`../../../shared/src/lang/expr_semantics.gleam` once a review noticed neither
 copy actually needed to be there — see that module's own section below.
 
 ```gleam
@@ -1228,7 +1228,7 @@ pass-through returning `catalog` unchanged on success.
 Each module gets its own `test/lang/*_test.gleam`, following the
 one-behavior-per-test-function style already used in
 `test/util/hlc/base62_test.gleam`. As built, these live under
-`shared/test/lang/`, `schema/test/lang/`, or `streams/test/lang/`
+`../../../shared/test/lang`, `../../../schema/test/lang`, or `../../../streams/test/lang`
 matching wherever the module itself lives (see "Module layout" above).
 
 ### `shared/test/lang/token_test.gleam`
@@ -1239,7 +1239,7 @@ matching wherever the module itself lives (see "Module layout" above).
   `lexer_test.gleam`. Not yet built (no such helper exists), same as
   planned.
 
-### `shared/test/lang/token_stream_test.gleam`
+### `../../../shared/test/lang/token_stream_test.gleam`
 
 Not in the original plan — added once `token_stream.gleam` was pulled out
 of `parser.gleam`'s own plumbing (see "Module layout"). Covers `current`/
@@ -1249,7 +1249,7 @@ token correctly reporting `False` from `peek_keyword` rather than crashing
 or matching by accident), and `consume_optional_semicolon` (both the
 present-and-consumed and absent-and-fallback-position branches).
 
-### `shared/test/lang/expr_parser_test.gleam`
+### `../../../shared/test/lang/expr_parser_test.gleam`
 
 Not in the original plan as a single `parser_test.gleam` split out this
 way, but needed once `expr_parser.gleam` became a module of its own with
@@ -1279,10 +1279,10 @@ wraps the same `expr` grammar differently — a `CREATE STREAM ... CHECK
 statement families' actual entry points into `expr_parser` get covered,
 at the cost of the same expression-level assertions appearing twice).
 
-### `shared/test/lang/expr_semantics_test.gleam`
+### `../../../shared/test/lang/expr_semantics_test.gleam`
 
 Same reasoning as `expr_parser_test.gleam` above: `expr_semantics.gleam`
-is logic living in `shared/`, so `shared`'s own `gleam test` needs to be
+is logic living in `../../../shared`, so `shared`'s own `gleam test` needs to be
 able to catch a regression in it directly, not only via whichever of
 `ddl_semantics_test.gleam`/`dml_semantics_test.gleam` happens to exercise
 the broken case. Exercised against a throwaway local error type, not
@@ -1300,7 +1300,7 @@ coupled to one:
   references, only some unknown → only those are reported; no references
   at all → never flagged.
 
-### `shared/test/lang/lexer_test.gleam`
+### `../../../shared/test/lang/lexer_test.gleam`
 
 - One keyword from each of §3.1–§3.4 tokenizes to its `Keyword` variant,
   case-insensitively (`CREATE`, `create`, `CrEaTe` all → `KwCreate`).
@@ -1339,7 +1339,7 @@ coupled to one:
   *non*-reserved (`value`) still tokenizes as a plain `Identifier`;
   quoting a reserved word (`"select"`) still works.
 
-### `shared/test/lang/catalog_test.gleam`
+### `../../../shared/test/lang/catalog_test.gleam`
 
 Built directly against `catalog.gleam`'s own primitives (`ColumnSchema`/
 `NamedCheck` values constructed by hand), not via `ddl_ast`/
@@ -1360,7 +1360,7 @@ see its own section above.
   `catalog.gleam` only ever sees `Insert` indirectly, through whatever a
   prior `CreateStream`/`AlterStream` already recorded.
 
-### `schema/test/lang/ddl_parser_test.gleam`, `streams/test/lang/dml_parser_test.gleam`
+### `../../../schema/test/lang/ddl_parser_test.gleam`, `../../../streams/test/lang/dml_parser_test.gleam`
 
 Both files exercise the *same* `expr_parser.gleam` grammar (see the note
 under `expr_parser_test.gleam` above) through their own package's actual
@@ -1408,7 +1408,7 @@ in both files:
   confirms the grammar-level rejection, distinct from the (likely dead,
   per the note above) semantic-level `InsertColumnListEmpty` check.
 
-### `schema/test/lang/ddl_semantics_test.gleam`, `streams/test/lang/dml_semantics_test.gleam`
+### `../../../schema/test/lang/ddl_semantics_test.gleam`, `../../../streams/test/lang/dml_semantics_test.gleam`
 
 One test per `SemanticError` variant each module actually raises (see the
 two separate `SemanticError` types above), each with a minimal
@@ -1482,7 +1482,7 @@ six steps below were already built and passing:
 (streams); `parser.gleam` into `expr_parser.gleam` (shared) +
 `ddl_parser.gleam` (schema) + `dml_parser.gleam` (streams), pulling
 `token_stream.gleam`'s cursor out along the way; `catalog.gleam` moved
-from `shared/` to `schema/`, then back to `shared/` once a review
+from `../../../shared` to `../../../schema`, then back to `../../../shared` once a review
 decoupled it from `ddl_ast` (see its own section above); `semantic.gleam`
 split into `ddl_semantics.gleam` (schema) + `dml_semantics.gleam`
 (streams — depending only on `shared` in production code once
@@ -1576,7 +1576,7 @@ here — see that list directly) plus what this planning pass surfaced:
   (`SemanticError` itself was the same story until an earlier review
   pruned `dml_semantics`'s copy down to only the eight variants
   `check_insert` actually raises.) Both functions moved to
-  `shared/src/lang/expr_semantics.gleam` — `collect_column_refs` as-is
+  `../../../shared/src/lang/expr_semantics.gleam` — `collect_column_refs` as-is
   (it never touched `SemanticError`), `check_expr_column_refs` made
   generic over the error type via a caller-supplied constructor parameter
   (`fn(String, Span) -> e`), since each package's `UnknownColumnReference`
@@ -1588,9 +1588,9 @@ here — see that list directly) plus what this planning pass surfaced:
   `catalog.gleam`~~ — **resolved**: `catalog.gleam`'s `apply_statement`
   used to operate directly on `ddl_ast`'s `DdlStatement`/`StreamElement`/
   `AlterAction` (schema-only types), which is why `catalog.gleam` lived
-  in `schema/` rather than `shared/` — but `dml_semantics.gleam`'s
+  in `../../../schema` rather than `../../../shared` — but `dml_semantics.gleam`'s
   `INSERT` checks need the same `Catalog` to read a stream's current
-  shape, so `streams/gleam.toml` ended up depending on all of `schema`
+  shape, so `../../../streams/gleam.toml` ended up depending on all of `schema`
   (its DDL parser and semantics included) for that one module, contrary
   to CLAUDE.md's stated architecture ("every other package depends on it
   via `shared`"). A review decoupled `catalog.gleam` from `ddl_ast`: it
@@ -1599,9 +1599,9 @@ here — see that list directly) plus what this planning pass surfaced:
   a validated `DdlStatement` into those calls (one variant at a time,
   reusing the column/constraint-gathering helpers `check_create_stream`
   already builds for validation) rather than handing the whole statement
-  to `catalog.gleam`. That let `catalog.gleam` move back to `shared/`,
+  to `catalog.gleam`. That let `catalog.gleam` move back to `../../../shared`,
   and `streams`' production code now depends on `shared` alone —
-  `streams/gleam.toml`'s `schema` entry is a `[dev_dependencies]`-only
+  `../../../streams/gleam.toml`'s `schema` entry is a `[dev_dependencies]`-only
   dependency now, kept solely because one test
   (`dml_semantics_test.gleam`'s worked-example test) chooses to build its
   `Catalog` fixture via real DDL parsing rather than by hand.

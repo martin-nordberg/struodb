@@ -1,13 +1,13 @@
 # StruoDB Query Language — Codegen Implementation Plan
 
-Implements the "Out of scope" item `docs/lang/implementation-plan.md` left
+Implements the "Out of scope" item `implementation-plan.md` left
 for later: turning a validated `Statement`/`Catalog` into PostgreSQL SQL
 text. Read `spec.md` and `implementation-plan.md` first — this plan builds
 directly on `token`/`lexer`/`ast`/`parser`/`catalog`/`semantic` as they
 exist today and doesn't re-derive their design decisions.
 
-**Status: implemented**, as `shared/src/lang/expr_codegen.gleam` +
-`schema/src/lang/ddl_codegen.gleam` + `streams/src/lang/dml_codegen.gleam`,
+**Status: implemented**, as `../../../shared/src/lang/expr_codegen.gleam` +
+`../../../schema/src/lang/ddl_codegen.gleam` + `../../../streams/src/lang/dml_codegen.gleam`,
 per the split "Module layout" below settled on. This plan was originally
 written before `lang/` split across `shared`/`schema`/`streams` (see
 `implementation-plan.md`'s own "Note on package layout" and CLAUDE.md's
@@ -135,7 +135,7 @@ final shape, not a stopgap.
   anything in the parsed `DdlStatement` at all, since `CREATE STREAM`
   never declares them (spec.md §9.2). `_struo_hlc` is inlined
   `PRIMARY KEY`, no explicit `NOT NULL` (redundant once `PRIMARY KEY` is
-  present); the other 3 get an explicit `NOT NULL`. `docs/hlc/spec.md`
+  present); the other 3 get an explicit `NOT NULL`. `../plans/hlc/spec.md`
   states the encoding is fixed-width, 15 characters, "chosen specifically
   so the value fits a PostgreSQL `char(15)` column with no padding" —
   `_struo_hlc CHAR(15)` is that decision cashed in, not a new one.
@@ -255,7 +255,7 @@ pub fn generate(
 pub fn generate_standalone(source: String) -> Result(String, CodegenError)
 ```
 
-`streams/src/lang/dml_codegen.gleam` mirrors this shape against
+`../../../streams/src/lang/dml_codegen.gleam` mirrors this shape against
 `DmlStatement`/`dml_semantics.SemanticError`/`ep.ParseError`, one package
 over — with one real difference, not just a type substitution: both
 `generate` and `generate_standalone` there take an extra
@@ -429,7 +429,7 @@ parens beyond the call's own).
 Three files, one per package, matching the existing per-module test
 files' one-behavior-per-function style:
 
-`shared/test/lang/expr_codegen_test.gleam`:
+`../../../shared/test/lang/expr_codegen_test.gleam`:
 
 - One test per `DataType` mapping row above (both the `Some`/bare forms
   where a type takes parameters).
@@ -440,7 +440,7 @@ files' one-behavior-per-function style:
   precedence tests, but checking output *text* against an expected string
   instead of an expected AST); a function call, including zero-arg.
 
-`schema/test/lang/ddl_codegen_test.gleam`:
+`../../../schema/test/lang/ddl_codegen_test.gleam`:
 
 - `CreateStream`/`AlterStream` codegen for spec.md's own §9.7/§10.7
   examples, each checked against a fully literal expected PostgreSQL
@@ -464,7 +464,7 @@ files' one-behavior-per-function style:
   statement (`SemanticFailure` naming the right `statement_index`, and
   *not* also reporting cascading errors from any statement after it).
 
-`streams/test/lang/dml_codegen_test.gleam` mirrors the last four bullets
+`../../../streams/test/lang/dml_codegen_test.gleam` mirrors the last four bullets
 against `Insert`/`dml_codegen.generate`/`dml_semantics.SemanticError`
 instead, using `schema/ddl_parser` + `schema/ddl_semantics` (already a
 `streams` dependency — see CLAUDE.md) to build a realistic `Catalog` to
@@ -570,16 +570,16 @@ to the next.
 1. ~~`ddl_parser.gleam`/`dml_parser.gleam`: extract `parse_one_statement`,
    add `pub fn parse_many` to each + tests (multi-statement input, the
    semicolon-in-a-string-literal case, empty input).~~
-2. ~~`shared/src/lang/expr_codegen.gleam`: `data_type_to_sql`,
+2. ~~`../../../shared/src/lang/expr_codegen.gleam`: `data_type_to_sql`,
    `quote_identifier`, `quote_string_literal` + tests — pure,
    independently testable, no dependency on the rest of codegen.~~
 3. ~~`expr_to_sql` (same module) + precedence-aware reparenthesization +
    tests — the most subtle part, same reasoning as why the parent plan
    built the parser's expression grammar before its statement grammars.~~
-4. ~~`schema/src/lang/ddl_codegen.gleam`'s `create_stream_to_sql` /
+4. ~~`../../../schema/src/lang/ddl_codegen.gleam`'s `create_stream_to_sql` /
    `alter_stream_to_sql` + tests against the §9.7/§10.7 worked examples
    above.~~
-5. ~~`streams/src/lang/dml_codegen.gleam`'s `insert_to_sql` + tests against
+5. ~~`../../../streams/src/lang/dml_codegen.gleam`'s `insert_to_sql` + tests against
    the §11.7 worked example.~~
 6. ~~`generate` / `generate_standalone` (the `validate_all`/`render_all`
    driver) in both `ddl_codegen.gleam` and `dml_codegen.gleam` + tests,
@@ -651,7 +651,7 @@ worth a decision before or during implementation:
   happens), but some PostgreSQL style guidance recommends avoiding
   `char(n)` categorically in favor of `TEXT` with an explicit `CHECK
   (length(col) = 15)`. This plan keeps `CHAR(15)`, matching
-  `docs/hlc/spec.md`'s own stated intent directly; flagging the
+  `../plans/hlc/spec.md`'s own stated intent directly; flagging the
   alternative in case that guidance matters more than the direct match.
 - **Minimal vs. conservative reparenthesization.** Noted under "Design
   decisions" — the conservative rule can emit a technically-redundant

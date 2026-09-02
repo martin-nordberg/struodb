@@ -107,7 +107,7 @@ newline (`reader.gleam`'s `is_quit_sentinel`).
 
 ### `shared/hlc` — hybrid logical clock
 
-Implements the algorithm in `docs/hlc/spec.md`: each clock value is a
+Implements the algorithm in `documentation/docs/internals/hlc-spec.md`: each clock value is a
 15-character, base-62-encoded, lexicographically-sortable string
 (8 chars physical-time-ms, 2 chars logical counter, 5 chars caller-assigned
 node ID) sized to fit a PostgreSQL `char(15)` with no padding. `base62.gleam`
@@ -130,8 +130,11 @@ the alphabet breaks it.
 
 ### The StruoDB query language front end (`lang/`, split across `shared`/`schema`/`streams`)
 
-StruoDB's query language transpiles to PostgreSQL (see `docs/lang/spec.md`
-for the full grammar). Expression parsing (`expr`, `data_type`) is one
+StruoDB's query language transpiles to PostgreSQL (see
+`documentation/docs/struoql/` — `lexical-spec.md` §1–§6,
+`ddl-spec.md` §7–§10, `dml-spec.md` §11 — for the full grammar, split
+across those three pages by section range; `overview.md` is the entry
+point). Expression parsing (`expr`, `data_type`) is one
 grammar shared by two statement families with different package owners,
 so `lang/` exists in three places, split by what's reused vs. what's
 statement-family-specific — not kept in one module:
@@ -169,15 +172,15 @@ never changes one, since an `INSERT` never alters a stream's shape.
   case-insensitive, unquoted identifiers fold to lower case, quoted
   identifiers (`"..."`) are case-sensitive, matching PostgreSQL convention.
   An unquoted identifier matching one of PostgreSQL's own reserved
-  keywords (spec.md §3.5, ~101 words) is rejected at the lexer as
+  keywords (lexical-spec.md §3.5, ~101 words) is rejected at the lexer as
   `ReservedWord` rather than accepted as an `Identifier` — this is what
   lets a future codegen stage emit unquoted identifiers by default
   (content-based quoting only) instead of always-quoting, since no
   unquoted source identifier can ever collide with a PostgreSQL reserved
-  word; see `docs/lang/codegen-plan.md`'s identifier-quoting design
-  decision.
+  word; see `documentation/plans/lang/codegen-plan.md`'s
+  identifier-quoting design decision.
 - `expr_ast.gleam` / `expr_parser.gleam` (shared) — expressions,
-  `data_type` (spec.md §8–§9.1), and `GeneratedClause`/`NamedCheck` (§9.1,
+  `data_type` (ddl-spec.md §8–§9.1), and `GeneratedClause`/`NamedCheck` (§9.1,
   §9.5 — small wrappers around an `Expr` that both `ddl_ast.gleam`, as
   parsed, and `catalog.gleam`, as stored, need the same shape for): pure
   data plus the precedence-layered recursive-descent parser for the
@@ -211,12 +214,12 @@ never changes one, since an `INSERT` never alters a stream's shape.
   alone, with no `schema` dependency in `streams`' production code at
   all (see "What this is" above).
 - `ddl_ast.gleam` / `ddl_parser.gleam` (schema) — `CreateStream`/
-  `AlterStream` shape (spec.md §9–§10) and the parser that builds it. Read
-  `ddl_ast.gleam`'s header comment — it explains why some shapes (e.g.
-  `ColumnDef` vs `StreamElement`) are structured the way they are for
-  reuse across `CREATE`/`ALTER`.
-- `dml_ast.gleam` / `dml_parser.gleam` (streams) — `Insert` shape (spec.md
-  §11) and its parser.
+  `AlterStream` shape (ddl-spec.md §9–§10) and the parser that builds it.
+  Read `ddl_ast.gleam`'s header comment — it explains why some shapes
+  (e.g. `ColumnDef` vs `StreamElement`) are structured the way they are
+  for reuse across `CREATE`/`ALTER`.
+- `dml_ast.gleam` / `dml_parser.gleam` (streams) — `Insert` shape
+  (dml-spec.md §11) and its parser.
 - `ddl_semantics.gleam` (schema) / `dml_semantics.gleam` (streams) —
   validate a parsed statement against a `Catalog`. Each defines its own
   `SemanticError`, scoped to the variants it actually raises (no longer a
@@ -225,9 +228,13 @@ never changes one, since an `INSERT` never alters a stream's shape.
 
 Only `CREATE STREAM`, `ALTER STREAM`, and `INSERT` are in scope so far;
 querying/subscribing to a stream's events is explicitly out of scope per
-the spec. `docs/lang/spec.md` §13 and its "Remaining open details" section
-track settled-but-unimplemented and still-undecided points — check there
-before assuming a gap in the code is a bug rather than known scope.
+the spec. `documentation/docs/struoql/todo.md` ("Remaining Open Details")
+tracks still-undecided points — check there before assuming a gap in the
+code is a bug rather than known scope. (The pre-VitePress spec's own
+§13 "Design decisions" — a changelog recap of settled points, distinct
+from "Remaining open details" — does not appear in any of the split
+pages as of the 2026-09-02 docs reorg; flagged to the user, not yet
+relocated.)
 
 ### Logging and errors
 
@@ -238,11 +245,26 @@ failure is meant to crash the actor/test rather than be handled.
 
 ### Docs worth reading before working in a given area
 
-- `docs/lang/spec.md` — full query language grammar (lexical + statements).
-- `docs/lang/implementation-plan.md`, `docs/lang/codegen-plan.md` — planned
-  work for the language front end and PostgreSQL codegen.
-- `docs/hlc/spec.md`, `docs/hlc/implementation-plan.md` — HLC algorithm and
-  planned work.
-- `docs/todo.md` — outstanding code-review findings (currently none).
-- `docs/references.md` — external references (CloudEvents, EventQL,
-  PostgreSQL syntax docs) informing the design.
+Docs live in `documentation/` — a VitePress site under
+`documentation/docs/` (run `bun run docs:dev` from `documentation/` to
+browse it locally) plus `documentation/plans/`, historical planning docs
+deliberately excluded from the built site (see its own `docs:build`
+script/`.vitepress/config.ts` sidebar, which never references `plans/`).
+
+- `documentation/docs/struoql/overview.md`, `lexical-spec.md`,
+  `ddl-spec.md`, `dml-spec.md` — full query language grammar (lexical
+  §1–§6, expressions/`CREATE`/`ALTER STREAM` §7–§10, `INSERT` §11).
+- `documentation/docs/struoql/todo.md` — the spec's own "Remaining Open
+  Details" (settled-but-unimplemented/undecided grammar points) — despite
+  the "To Do" nav label, this is not a code-review-findings tracker.
+- `documentation/plans/lang/implementation-plan.md`,
+  `documentation/plans/lang/codegen-plan.md` — planned work for the
+  language front end and PostgreSQL codegen.
+- `documentation/docs/internals/hlc-spec.md` — the HLC algorithm.
+  `documentation/plans/hlc/implementation-plan.md` — its planned work.
+- `documentation/docs/internals/references.md` — external references
+  (CloudEvents, EventQL, PostgreSQL syntax docs) informing the design.
+
+No standalone code-review-findings tracker currently exists (the old
+`docs/todo.md` served that role — "currently none" outstanding — and
+was removed, not relocated, in the docs reorg).
