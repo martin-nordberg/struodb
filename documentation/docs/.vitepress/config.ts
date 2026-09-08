@@ -22,11 +22,11 @@ export default defineConfig({
           text: 'StruoQL',
           collapsed: true,
           items: [
-            {text: 'Overview', link: '/specifications/struoql/overview'},
-            {text: 'Lexical Spec', link: '/specifications/struoql/lexical-spec'},
-            {text: 'Schema Definition', link: '/specifications/struoql/ddl-spec'},
-            {text: 'Event Creation', link: '/specifications/struoql/dml-spec'},
-            {text: 'Design Decisions', link: '/specifications/struoql/design-decisions'},
+            {text: '1. Overview', link: '/specifications/struoql/overview'},
+            {text: '2. Lexical Spec', link: '/specifications/struoql/lexical-spec'},
+            {text: '3. Schema Definition', link: '/specifications/struoql/ddl-spec'},
+            {text: '4. Event Creation', link: '/specifications/struoql/dml-spec'},
+            {text: 'A. Design Decisions', link: '/specifications/struoql/design-decisions'},
           ]
         },
         {
@@ -48,6 +48,10 @@ export default defineConfig({
           ]
         },
       ],
+    },
+
+    outline: {
+      level: [2, 2]
     },
 
     socialLinks: [

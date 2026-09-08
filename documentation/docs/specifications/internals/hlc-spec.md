@@ -1,6 +1,6 @@
-# Hybrid Logical Clock — Specification
+# 2. Hybrid Logical Clock — Specification
 
-## Purpose
+## 2.1 Purpose
 
 A hybrid logical clock (HLC) combines wall-clock time with a logical
 counter so that clock values across nodes are both causally ordered (like a
@@ -12,9 +12,9 @@ query language stores that encoded value, plus its 3 fields decoded back
 out into their own columns, as 4 of the 5 automatic system columns every
 stream gets — `_struo_hlc`/`_struo_hlc_timestamp`/`_struo_hlc_count`/
 `_struo_hlc_node_id` (the 5th, `_struo_created_at`, isn't
-HLC-derived) — see [Schema Definition §9.2](/specifications/struoql/ddl-spec#_9-2-the-automatic-system-columns).
+HLC-derived) — see [Schema Definition §3.3.2](/specifications/struoql/ddl-spec#_3-3-2-the-automatic-system-columns).
 
-## Encoding
+## 2.2 Encoding
 
 - **Alphabet**: exactly `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz`
   (base 62; digit `0` is value 0, `Z` is value 35, `z` is value 61).
@@ -41,7 +41,7 @@ HLC-derived) — see [Schema Definition §9.2](/specifications/struoql/ddl-spec#
   sequence key) without decoding it first. Encoders must never emit a
   narrower/unpadded field — doing so would break this invariant.
 
-## Per-node state
+## 2.3 Per-node state
 
 Each node holds exactly one clock, conceptually:
 
@@ -52,9 +52,9 @@ Each node holds exactly one clock, conceptually:
 `node_id` is fixed for the lifetime of the running node; `physical_time_ms`
 and `counter` change on every operation below.
 
-## Operations
+## 2.4 Operations
 
-### 1. `next()` — record a local event
+### 2.4.1 `next()` — record a local event
 
 Given current state `(t, c)` and the node's own wall-clock reading `p`:
 
@@ -80,7 +80,7 @@ Given current state `(t, c)` and the node's own wall-clock reading `p`:
    "Non-goals / accepted limitations" below.
 4. Encode the new state and return it.
 
-### 2. `merge(remote)` — record a message received from another node
+### 2.4.2 `merge(remote)` — record a message received from another node
 
 1. Parse `remote` (a 15-character HLC string from another node) into
    `(rt, rc, _)` — the remote node ID is decoded only to validate the
@@ -100,7 +100,7 @@ Given current state `(t, c)` and the node's own wall-clock reading `p`:
    - Apply the same **rollover** rule as `next()` step 3 to `(new_t, tentative counter)`.
 4. Encode the new state, update local state, and return it.
 
-## Errors
+## 2.5 Errors
 
 Merging (and node ID validation at startup — see below) can fail because
 the input string is malformed. There are exactly two ways a base-62 field
@@ -112,7 +112,7 @@ can be malformed:
 The implementation plan defines a single error type covering both cases,
 reused for node ID validation and for `merge()`'s input validation.
 
-## Node ID
+## 2.6 Node ID
 
 - Exactly 5 base-62 characters.
 - Supplied by the caller when the clock is started (e.g. derived from
@@ -126,11 +126,11 @@ reused for node ID validation and for `merge()`'s input validation.
 - "Opaque" here means this spec assigns no meaning to a node ID beyond
   identity/uniqueness — it doesn't mean non-numeric. StruoDB's query
   language decodes it to its base-62 integer value for storage in
-  `_struo_hlc_node_id INTEGER` ([Schema Definition §9.2](/specifications/struoql/ddl-spec#_9-2-the-automatic-system-columns)); decoding a
+  `_struo_hlc_node_id INTEGER` ([Schema Definition §3.3.2](/specifications/struoql/ddl-spec#_3-3-2-the-automatic-system-columns)); decoding a
   base-62 string to an integer is well-defined and reversible regardless
   of what the digits are taken to mean.
 
-## Non-goals / accepted limitations
+## 2.7 Non-goals / accepted limitations
 
 - No detection of duplicate node IDs across nodes.
 - No special-case handling of the system clock moving backward beyond what
@@ -150,7 +150,7 @@ reused for node ID validation and for `merge()`'s input validation.
   of erroring; this is expected, not a defect, but is worth knowing before
   picking this encoding for a very high-throughput single node.
 
-## Reference material
+## 2.8 Reference material
 
 An earlier, unrelated project contains a structurally similar TypeScript
 HLC (`src/util/hlc.ts` in this repo, kept only as inspiration). It differs

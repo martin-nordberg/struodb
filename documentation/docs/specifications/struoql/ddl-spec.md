@@ -1,26 +1,26 @@
 # Struo Query Language — Schema Definition
 
-## 7. Scope
+## 3.1 Scope
 
 `CREATE STREAM` and `ALTER STREAM` — declaring a stream's shape and
-evolving it — `INSERT` (§11, appending events to a stream), and the
+evolving it — `INSERT` (§4.1, appending events to a stream), and the
 expression/function call grammar all three depend on, are specified below.
 Querying or subscribing to a stream's events is entirely out of scope for
-now — no syntax, keywords, or semantics for it are decided (§12).
+now — no syntax, keywords, or semantics for it are decided (§5).
 
 A stream's shape is a **fixed schema**, declared up front like
 PostgreSQL's `CREATE TABLE` — named, typed columns — rather than a
 schema-flexible envelope (e.g. a CloudEvents-style envelope with a
 JSON/JSONB payload).
 
-## 8. Expressions and Function Calls
+## 3.2 Expressions and Function Calls
 
-Expressions appear wherever `CREATE STREAM` (§9) or `ALTER STREAM` (§10)
+Expressions appear wherever `CREATE STREAM` (§3.3) or `ALTER STREAM` (§3.4)
 takes an `expr` — in `DEFAULT`, `GENERATED ALWAYS AS (...)`, and
 `CHECK (...)` clauses — and will be reused as-is once `WHERE`-like
-querying syntax exists (§12).
+querying syntax exists (§5).
 
-### 8.1 Grammar
+### 3.2.1 Grammar
 
 ```
 expr ::= literal
@@ -40,7 +40,7 @@ expr ::= literal
        | function_call
        | '(' expr ')'
 
-literal ::= numeric_literal | string_literal | TRUE | FALSE | NULL   -- §4
+literal ::= numeric_literal | string_literal | TRUE | FALSE | NULL   -- §2.4
 
 column_ref ::= identifier
 
@@ -56,14 +56,14 @@ binary_op ::= '+' | '-' | '*' | '/' | '%' | '^'
             | AND | OR
 ```
 
-`data_type` is as defined in §9.1 (no `CAST(expr AS type)` alternate form
-— see [Open Issues](/specifications/struoql/design-decisions#open-issues)). The `IN`
+`data_type` is as defined in §3.3.1 (no `CAST(expr AS type)` alternate form
+— see [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues)). The `IN`
 list is always an explicit parenthesized expression list; there's no
 subquery form (`IN (SELECT
-...)`) since no querying syntax exists yet (§12).
+...)`) since no querying syntax exists yet (§5).
 
 `bound_expr` is `expr` restricted to precedence level 6 or tighter
-(§8.2) — i.e. any `expr` production except the `BETWEEN`/`IN`/`LIKE`/
+(§3.2.2) — i.e. any `expr` production except the `BETWEEN`/`IN`/`LIKE`/
 `ILIKE`/`SIMILAR TO` (level 7), comparison (level 8), `IS` (level 9),
 `NOT` (level 10), `AND` (level 11), and `OR` (level 12) alternatives
 above. `BETWEEN`'s bounds, `LIKE`/`ILIKE`/`SIMILAR TO`'s pattern, and
@@ -75,13 +75,13 @@ this restriction: each sits inside explicit `(...)`/`,` delimiters, which
 already make the boundary unambiguous, so they use the unrestricted
 `expr`.
 
-`identifier` is as defined in §2. A `column_ref` is currently always
+`identifier` is as defined in §2.2. A `column_ref` is currently always
 unqualified — no stream/table-qualified form (`stream_name.column_name`)
 is specified yet, since expressions today only appear inside the
 `CREATE STREAM`/`ALTER STREAM` that defines the columns they reference;
-qualification will matter once multi-stream querying (§12) exists.
+qualification will matter once multi-stream querying (§5) exists.
 
-### 8.2 Operator Precedence
+### 3.2.2 Operator Precedence
 
 Following PostgreSQL's own precedence table exactly, highest (tightest
 binding) to lowest:
@@ -106,7 +106,7 @@ Parentheses `( )` override precedence as usual.
 
 **A PostgreSQL quirk worth flagging, since it's non-obvious and this spec
 follows PostgreSQL's grammar exactly here:** only unary `+`/`-` get the
-tight "level 2" binding. Prefix `~` (bitwise NOT, §5.4) is not special-cased
+tight "level 2" binding. Prefix `~` (bitwise NOT, §2.5.4) is not special-cased
 the same way — it sits at level 6 with the other binary operators, which
 is *looser* than arithmetic. So `~1 + 2` parses as `~(1 + 2)`, not
 `(~1) + 2`. Parenthesize `~` operands when in doubt.
@@ -117,7 +117,7 @@ populate are `[ ]` (array subscript) and `.` (table/column separator used
 within an expression) — no array types and no qualified `column_ref` form
 exist yet.
 
-### 8.3 Function Calls
+### 3.2.3 Function Calls
 
 A function call is an identifier immediately followed by `(`, a
 comma-separated list of zero or more expressions, and `)` — e.g.
@@ -131,9 +131,9 @@ interpreted as a call.
 No built-in or user-defined functions are defined yet — see "Remaining
 open details."
 
-## 9. CREATE STREAM
+## 3.3 CREATE STREAM
 
-### 9.1 Synopsis
+### 3.3.1 Synopsis
 
 ```
 create_stream_stmt ::= CREATE STREAM stream_name '(' stream_element (',' stream_element)* ')' ';'?
@@ -151,8 +151,8 @@ column_clause ::= OPTIONAL
 table_constraint ::= CONSTRAINT constraint_name CHECK '(' expr ')'
 ```
 
-`stream_name`, `column_name`, and `constraint_name` are identifiers (§2).
-`expr` is defined in §8. `data_type` is formally:
+`stream_name`, `column_name`, and `constraint_name` are identifiers (§2.2).
+`expr` is defined in §3.2. `data_type` is formally:
 
 ```
 data_type ::= BIGINT
@@ -177,7 +177,7 @@ data_type ::= BIGINT
             | VARCHAR ('(' integer_literal ')')?
 ```
 
-`integer_literal` is as defined in §4.2. Per PostgreSQL convention:
+`integer_literal` is as defined in §2.4.2. Per PostgreSQL convention:
 
 - `CHAR`/`VARCHAR`'s `(n)` is optional; bare `CHAR` defaults to length 1,
   bare `VARCHAR` to unlimited length. Where given, `n` must be at least 1.
@@ -186,13 +186,13 @@ data_type ::= BIGINT
   must be at least 1, and `s` (scale, default 0 if only `p` is given) must
   satisfy `0 <= s <= p`.
 - `DOUBLE` is **always** followed by `PRECISION` — the two keywords
-  (§3.1) together name one type, `DOUBLE PRECISION`; `DOUBLE` alone is not
+  (§2.3.1) together name one type, `DOUBLE PRECISION`; `DOUBLE` alone is not
   a valid `data_type`.
 - Every other keyword above is bare, with no parameters.
 
-This grammar doesn't express the restriction in §9.4 (a `DEFAULT`
+This grammar doesn't express the restriction in §3.3.4 (a `DEFAULT`
 expression may not reference a sibling column), the reserved-prefix rule
-(§2), or the uniqueness requirements below; all are enforced as semantic
+(§2.2), or the uniqueness requirements below; all are enforced as semantic
 checks, not by the productions above.
 
 - **`column_name` must be unique within a stream** — a stream with two
@@ -201,18 +201,18 @@ checks, not by the productions above.
   `expr`, or a target in `ALTER STREAM`'s `DROP COLUMN`/`ALTER COLUMN`,
   would be ambiguous.)
 - **`constraint_name` must be unique within a stream**, across both
-  column-level and table-level `CHECK`s — see §9.5.
+  column-level and table-level `CHECK`s — see §3.3.5.
 
 Whether `column_clause`s may repeat, combine freely, or must appear in a
 particular order (e.g. can a column have both `DEFAULT` and `CHECK`?) is
-not yet constrained — see [Open Issues](/specifications/struoql/design-decisions#open-issues).
+not yet constrained — see [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues).
 
-### 9.2 The Automatic System Columns
+### 3.3.2 The Automatic System Columns
 
-`HLC` is not a data type, and `CREATE STREAM` never declares a primary
-key column at all. Instead, every stream automatically gets 5 columns —
-none written in `CREATE STREAM`, none in `column_def`'s `data_type`
-grammar — prepended ahead of whatever the statement itself declares:
+`CREATE STREAM` never declares a primary
+key column, and need not track the timing for when events are created.
+Instead, every stream automatically gets 5 system-generated columns
+prepended ahead of whatever the statement itself declares:
 
 | Column                  | Type          | Holds                                    |
 |--------------------------|---------------|-------------------------------------------|
@@ -222,29 +222,22 @@ grammar — prepended ahead of whatever the statement itself declares:
 | `_struo_hlc_node_id`     | `INTEGER`     | The HLC's embedded node id, decoded from base-62 to its integer value. |
 | `_struo_created_at`      | `TIMESTAMPTZ` | The wall-clock UTC moment PostgreSQL actually inserts the row. |
 
-Lower case, like every other unquoted identifier (§2) — these are never
-written in source at all, so there's no "user typed it uppercase" case to
-preserve; an uppercase name would only force `quote_identifier` to render
-it quoted for no functional reason, and would force a client to quote it
-too when referencing it (e.g. in `RETURNING`) to avoid its own unquoted
-spelling folding away from the catalog's exact-case key.
+In the generated PostgreSQL these system-generated columns remian lower case, 
+like other unquoted identifiers (§2.2).
 
-All 5 are `NOT NULL` (`_struo_hlc` via `PRIMARY KEY`, same as before; the
-other 4 explicitly). The first 4 revert to something like the *original*
-design this spec once described and then moved away from (an implicit,
-reserved, system-populated column) — except now split into 4 columns
-instead of 1, and populated by the codegen layer itself rather than by
-the client typing a value into `INSERT`: `INSERT` (§11) never accepts a
+All 5 are `NOT NULL` (`_struo_hlc` via `PRIMARY KEY`; the
+other 4 explicitly). The system-generated columns are exactly that at insertion
+time as well: `INSERT` (§4.1) never accepts a
 value for any of the 5, the same way it never accepts one for a
-`GENERATED` column (§11.4) — but the 5 don't all get their actual value
+`GENERATED` column (§4.1.4) — but the 5 don't all get their actual value
 the same way. The 4 HLC-derived columns come from a live HLC clock
-instance passed to codegen at generation time, one fresh draw per row
-inserted, and are written into the generated `INSERT` text explicitly.
+instance at generation time, one fresh draw per row
+inserted, and are written into the generated PostgreSQL `INSERT` text explicitly.
 `_struo_created_at` is different: it's simply left out of the generated
 `INSERT`'s column list entirely, exactly like an ordinary column with a
-`DEFAULT` and no value supplied (§11.3) — its value comes from the
+`DEFAULT` and no value supplied (§4.1.3) — its value comes from the
 column's own `DEFAULT clock_timestamp()`, rendered once in `CREATE
-STREAM`'s transpiled `CREATE TABLE` (§9.7), so PostgreSQL itself fills it
+STREAM`'s transpiled `CREATE TABLE` (§3.3.7), so PostgreSQL itself fills it
 in at the moment it actually inserts the row, not the client/codegen
 layer. This is deliberately a separate value from `_struo_hlc_timestamp`:
 that one is the HLC's own causality-ordering clock, which — per the
@@ -257,17 +250,17 @@ A node's clock producing a duplicate HLC value is misbehaving (HLC values
 must be unique per the [Hybrid Logical Clock](/specifications/internals/hlc-spec) spec's
 node-ID discipline); the
 transpiled table's `PRIMARY KEY` constraint on `_struo_hlc` is what
-actually rejects it, unless `INSERT`'s `ON CONFLICT DO NOTHING` (§11.5)
+actually rejects it, unless `INSERT`'s `ON CONFLICT DO NOTHING` (§4.1.5)
 is used to absorb it silently. No additional StruoDB-level uniqueness
 logic is needed.
 
 **Reserved namespace.** No stream, column, or constraint name may be
-*declared* starting with `_STRUO_`, case-insensitively (§2) — reserved
+*declared* starting with `_STRUO_`, case-insensitively (§2.2) — reserved
 for these 5 columns and future system use. A stream may still
 *reference* one of them (e.g. `RETURNING _struo_hlc`) exactly like any
 other real column.
 
-### 9.3 Nullability
+### 3.3.3 Nullability
 
 Columns are `NOT NULL` by default after transpiling to PostgreSQL — the
 opposite of PostgreSQL's own default (nullable unless `NOT NULL` is
@@ -278,12 +271,12 @@ marks a column nullable; writing `NOT NULL` explicitly on a column
 definition is a **compile-time error** rather than a legal, redundant
 no-op — it is already the default, and permitting it would just invite
 writing `NOT NULL OPTIONAL` or otherwise implying the two are independent
-toggles rather than one one-way switch. `NOT` (§3.4) and `NULL` (§3.2)
-remain keywords for other purposes (e.g. within `expr`, §8.1); this
+toggles rather than one one-way switch. `NOT` (§2.3.4) and `NULL` (§2.3.2)
+remain keywords for other purposes (e.g. within `expr`, §3.2.1); this
 grammar just doesn't attach a column-clause meaning to writing them
 together.
 
-### 9.4 Defaults and Generated Columns
+### 3.3.4 Defaults and Generated Columns
 
 Two distinct clauses, matching PostgreSQL's own distinction and its own
 restrictions — deliberately not merged into one, because they have
@@ -305,7 +298,7 @@ different rules about what the expression may reference:
   One of the two must be written explicitly — there is no default if
   omitted.
 
-### 9.5 Constraints
+### 3.3.5 Constraints
 
 - **`CONSTRAINT constraint_name CHECK (expr)`** may appear attached to a
   single column (`column_def`) or as a standalone `table_constraint`.
@@ -319,18 +312,18 @@ different rules about what the expression may reference:
   `CONSTRAINT` of the same name, whether column-level or table-level, is
   a compile-time error. This is what makes `ALTER STREAM`'s
   `DROP CONSTRAINT constraint_name`/`ADD CONSTRAINT constraint_name`
-  (§10.5) unambiguous by name alone, the same way `column_name`
-  uniqueness (§9.1) makes `DROP COLUMN`/`ALTER COLUMN` unambiguous.
+  (§3.4.5) unambiguous by name alone, the same way `column_name`
+  uniqueness (§3.3.1) makes `DROP COLUMN`/`ALTER COLUMN` unambiguous.
 - **No `UNIQUE` constraint** exists for a stream, apart from the implicit
-  primary-key uniqueness on `_struo_hlc` (§9.2).
+  primary-key uniqueness on `_struo_hlc` (§3.3.2).
 - **Streams have no foreign keys.**
 
-### 9.6 Built-in Functions
+### 3.3.6 Built-in Functions
 
-See §8.3 for the general rule (ordinary identifiers, not keywords). No
-built-in functions are defined yet — see [Open Issues](/specifications/struoql/design-decisions#open-issues).
+See §3.2.3 for the general rule (ordinary identifiers, not keywords). No
+built-in functions are defined yet — see [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues).
 
-### 9.7 Example
+### 3.3.7 Example
 
 ```
 CREATE STREAM sensor_reading (
@@ -342,11 +335,11 @@ CREATE STREAM sensor_reading (
 ```
 
 (This corrects one thing from the original working draft: `FLOAT` →
-`REAL`, since `FLOAT` isn't a data type keyword (§3.1). The transpiled
-table also carries the 5 automatic system columns of §9.2, not written
+`REAL`, since `FLOAT` isn't a data type keyword (§2.3.1). The transpiled
+table also carries the 5 automatic system columns of §3.3.2, not written
 here at all.)
 
-## 10. ALTER STREAM
+## 3.4 ALTER STREAM
 
 `ALTER STREAM` works analogously to PostgreSQL's `ALTER TABLE`, with
 several deliberate semantic restrictions specific to an event stream's
@@ -358,7 +351,7 @@ of these restrictions is that a schema change made through `ALTER STREAM`
 is always **backwards compatible** — nothing that was a valid row before
 the change can become invalid after it.
 
-### 10.1 Synopsis
+### 3.4.1 Synopsis
 
 ```
 alter_stream_stmt ::= ALTER STREAM stream_name alter_action (',' alter_action)* ';'?
@@ -370,36 +363,36 @@ alter_action ::= ADD COLUMN column_def
                | DROP CONSTRAINT constraint_name
 ```
 
-`column_def` and `data_type` are as defined in §9.1; `expr` as in §8.
+`column_def` and `data_type` are as defined in §3.3.1; `expr` as in §3.2.
 Multiple `alter_action`s may appear in one statement, comma-separated,
 matching PostgreSQL's own `ALTER TABLE` — this is assumed rather than
 confirmed; flag it if a single action per statement is preferred instead.
-`COLUMN` is mandatory here (§3.3), unlike PostgreSQL where it's optional.
+`COLUMN` is mandatory here (§2.3.3), unlike PostgreSQL where it's optional.
 
-### 10.2 Adding Columns
+### 3.4.2 Adding Columns
 
 `ADD COLUMN column_def` appends a new column, using the same `column_def`
-grammar as `CREATE STREAM` (§9.1). Existing rows have no value for a
-brand-new column, and columns are `NOT NULL` by default (§9.3), so the
+grammar as `CREATE STREAM` (§3.3.1). Existing rows have no value for a
+brand-new column, and columns are `NOT NULL` by default (§3.3.3), so the
 added `column_def` **must** include at least one of:
 
-- `OPTIONAL` (§9.3), or
-- `DEFAULT expr` (§9.4), or
-- `GENERATED ALWAYS AS (...) STORED`/`VIRTUAL` (§9.4)
+- `OPTIONAL` (§3.3.3), or
+- `DEFAULT expr` (§3.3.4), or
+- `GENERATED ALWAYS AS (...) STORED`/`VIRTUAL` (§3.3.4)
 
 The added column's name is subject to the same reserved-`_STRUO_`-prefix
-rule (§2) as `CREATE STREAM`'s own columns.
+rule (§2.2) as `CREATE STREAM`'s own columns.
 
-### 10.3 Dropping Columns
+### 3.4.3 Dropping Columns
 
 `DROP COLUMN column_name` removes a column, allowed **only if the column
 is `OPTIONAL`** — a `NOT NULL` column may not be dropped. None of the 5
-automatic system columns (§9.2) may ever be dropped, `OPTIONAL` or not —
+automatic system columns (§3.3.2) may ever be dropped, `OPTIONAL` or not —
 a **compile-time error** distinct from (and checked ahead of) the
 `OPTIONAL` rule, since the real reason is "not yours to drop," not
 incidentally failing the nullability check.
 
-### 10.4 Altering Column Types
+### 3.4.4 Altering Column Types
 
 `ALTER COLUMN column_name TYPE data_type` changes a column's declared
 type, but **only to a strictly widening type** — one guaranteed to accept
@@ -418,14 +411,14 @@ become invalid under the new type:
 
 Narrowing, and converting between unrelated type families (e.g. `INT` to
 `DECIMAL`), aren't addressed by this rule and are presumed disallowed for
-now — see [Open Issues](/specifications/struoql/design-decisions#open-issues). Targeting
-one of the 5 automatic system columns (§9.2) is a compile-time error,
-same as §10.3's drop restriction.
+now — see [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues). Targeting
+one of the 5 automatic system columns (§3.3.2) is a compile-time error,
+same as §3.4.3's drop restriction.
 
-### 10.5 Constraints
+### 3.4.5 Constraints
 
 - `ADD CONSTRAINT constraint_name CHECK (expr)` adds a new named `CHECK`
-  constraint (§9.5), validated against existing rows.
+  constraint (§3.3.5), validated against existing rows.
 - `DROP CONSTRAINT constraint_name` removes one.
 - **Replacing** a constraint is `DROP CONSTRAINT` followed by
   `ADD CONSTRAINT` under the same name — PostgreSQL itself has no way to
@@ -436,12 +429,12 @@ same as §10.3's drop restriction.
 
   **How this is verified is not yet decided** — checking that one
   arbitrary boolean expression logically implies another is undecidable
-  in general. See [Open Issues](/specifications/struoql/design-decisions#open-issues)
+  in general. See [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues)
   for the options under consideration (ranging from an unenforced
   documented convention to a pattern-matched check restricted to simple
   numeric comparisons).
 
-### 10.6 No Renaming
+### 3.4.6 No Renaming
 
 `ALTER STREAM` does not support renaming anything — not the stream, a
 column, or a constraint. Once created, names are stable; this differs
@@ -450,7 +443,7 @@ deliberately from PostgreSQL's `RENAME TO`/`RENAME COLUMN`/
 referencing a name are more exposed to a silent rename than an ordinary
 table's would be.
 
-### 10.7 Example
+### 3.4.7 Example
 
 ```
 ALTER STREAM sensor_reading
@@ -460,10 +453,10 @@ ALTER STREAM sensor_reading
     ADD CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 90);
 ```
 
-(Widens `units` from `VARCHAR(32)` to `VARCHAR(64)` — legal per §10.4 —
+(Widens `units` from `VARCHAR(32)` to `VARCHAR(64)` — legal per §3.4.4 —
 adds an optional column, and replaces `reading_in_range` with a stricter
-bound, 90 instead of 100, as required by §10.5.)
+bound, 90 instead of 100, as required by §3.4.5.)
 
-### 10.8 Grammar Diagrams
+### 3.4.8 Grammar Diagrams
 
 - <a href="/x-specifications/struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>

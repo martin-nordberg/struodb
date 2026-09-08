@@ -145,8 +145,8 @@ any change to field widths or the alphabet breaks it.
 ### The StruoDB query language front end (`lang/`, split across `domain/shared`/`domain/schema`/`domain/streams`)
 
 StruoDB's query language transpiles to PostgreSQL (see
-`documentation/docs/specifications/struoql/` — `lexical-spec.md` §1–§6,
-`ddl-spec.md` §7–§10, `dml-spec.md` §11 — for the full grammar, split
+`documentation/docs/specifications/struoql/` — `lexical-spec.md` §2,
+`ddl-spec.md` §3, `dml-spec.md` §4 — for the full grammar, split
 across those three pages by section range; `overview.md` is the entry
 point). Expression parsing (`expr`, `data_type`) is one
 grammar shared by two statement families with different package owners,
@@ -191,7 +191,7 @@ below.
   case-insensitive, unquoted identifiers fold to lower case, quoted
   identifiers (`"..."`) are case-sensitive, matching PostgreSQL convention.
   An unquoted identifier matching one of PostgreSQL's own reserved
-  keywords (lexical-spec.md §3.5, ~101 words) is rejected at the lexer as
+  keywords (lexical-spec.md §2.3.5, ~101 words) is rejected at the lexer as
   `ReservedWord` rather than accepted as an `Identifier` — this is what
   lets a future codegen stage emit unquoted identifiers by default
   (content-based quoting only) instead of always-quoting, since no
@@ -199,8 +199,8 @@ below.
   word; see `documentation/plans/lang/codegen-plan.md`'s
   identifier-quoting design decision.
 - `expr_ast.gleam` / `expr_parser.gleam` (shared) — expressions,
-  `data_type` (ddl-spec.md §8–§9.1), and `GeneratedClause`/`NamedCheck` (§9.1,
-  §9.5 — small wrappers around an `Expr` that both `ddl_ast.gleam`, as
+  `data_type` (ddl-spec.md §3.2–§3.3.1), and `GeneratedClause`/`NamedCheck` (§3.3.1,
+  §3.3.5 — small wrappers around an `Expr` that both `ddl_ast.gleam`, as
   parsed, and `catalog.gleam`, as stored, need the same shape for): pure
   data plus the precedence-layered recursive-descent parser for the
   expressions/data types, reused as-is by both `ddl_parser` and
@@ -233,12 +233,12 @@ below.
   alone, with no `schema` dependency in `streams`' production code at
   all (see "What this is" above).
 - `ddl_ast.gleam` / `ddl_parser.gleam` (schema) — `CreateStream`/
-  `AlterStream` shape (ddl-spec.md §9–§10) and the parser that builds it.
+  `AlterStream` shape (ddl-spec.md §3.3–§3.4) and the parser that builds it.
   Read `ddl_ast.gleam`'s header comment — it explains why some shapes
   (e.g. `ColumnDef` vs `StreamElement`) are structured the way they are
   for reuse across `CREATE`/`ALTER`.
 - `dml_ast.gleam` / `dml_parser.gleam` (streams) — `Insert` shape
-  (dml-spec.md §11) and its parser.
+  (dml-spec.md §4.1) and its parser.
 - `ddl_semantics.gleam` (schema) / `dml_semantics.gleam` (streams) —
   validate a parsed statement against a `Catalog`. Each defines its own
   `SemanticError`, scoped to the variants it actually raises (no longer a
@@ -337,7 +337,7 @@ script/`.vitepress/config.ts` sidebar, which never references `plans/`).
   are shaped the way they are.
 - `documentation/docs/specifications/struoql/overview.md`, `lexical-spec.md`,
   `ddl-spec.md`, `dml-spec.md` — full query language grammar (lexical
-  §1–§6, expressions/`CREATE`/`ALTER STREAM` §7–§10, `INSERT` §11).
+  §2, expressions/`CREATE`/`ALTER STREAM` §3, `INSERT` §4).
 - `documentation/docs/specifications/struoql/design-decisions.md` — the spec's own
   "Settled Design Decisions" (changelog recap) and "Open Issues"
   (undecided grammar points) — not a code-review-findings tracker.

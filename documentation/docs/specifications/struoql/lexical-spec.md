@@ -1,6 +1,6 @@
-# Struo Query Language — Specification
+# 2. Struo Query Language — Specification
 
-## 1. Case Sensitivity
+## 2.1 Case Sensitivity
 
 StruoDB follows PostgreSQL conventions:
 
@@ -12,11 +12,11 @@ StruoDB follows PostgreSQL conventions:
 - Quoted identifiers (see below) preserve case exactly as written and are
   case-sensitive (`"Foo"` and `"foo"` are distinct identifiers).
 
-## 2. Identifiers
+## 2.2 Identifiers
 
 - **Unquoted identifiers**: begin with a letter (`A`–`Z`, `a`–`z`) or
   underscore (`_`), followed by zero or more letters, digits, or
-  underscores. Folded to lower case per §1.
+  underscores. Folded to lower case per §2.1.
 - **Quoted identifiers**: delimited by double quotes (`"..."`), may contain
   any character including whitespace and keywords, and are case-sensitive.
   A literal double quote inside a quoted identifier is written as two
@@ -31,12 +31,12 @@ StruoDB follows PostgreSQL conventions:
   applies; nothing here requires StruoDB itself to perform or replicate
   that truncation before then.
 - **Reserved words**: an unquoted identifier may not be one of StruoDB's
-  own keywords (§3) or one of PostgreSQL's own reserved keywords (§3.5)
+  own keywords (§2.3) or one of PostgreSQL's own reserved keywords (§2.3.5)
   either — quoting is required to use such a word as an identifier.
 - **Reserved prefix**: a *new* stream, column, or constraint name (i.e.
   one being declared, not merely referenced) may not start with `_STRUO_`,
   case-insensitively, quoted or not — reserved for the automatic system
-  columns (§9.2) and future system use. Unlike the length limit above,
+  columns (§3.3.2) and future system use. Unlike the length limit above,
   this is a compile-time error, not silent truncation/passthrough. It's
   checked only where a name is declared (`CREATE STREAM`/`ALTER STREAM`);
   *referencing* an existing `_STRUO_`-prefixed name (a `column_ref`, a
@@ -44,16 +44,16 @@ StruoDB follows PostgreSQL conventions:
   resolves normally, or it doesn't and is already an ordinary "unknown
   column"/"unknown stream" error.
 
-## 3. Keywords
+## 2.3 Keywords
 
 Keywords are grouped below by role. Unlike PostgreSQL — which splits
 keywords into reserved and non-reserved categories, the latter usable as
 identifiers in most positions — every StruoDB keyword is **reserved**: none
 of the words below may be used as an unquoted identifier, regardless of
-grammar position. (A quoted identifier, §2, is unaffected — `"create"` is
+grammar position. (A quoted identifier, §2.2, is unaffected — `"create"` is
 always a valid identifier.)
 
-### 3.1 Data Type Keywords
+### 2.3.1 Data Type Keywords
 * BIGINT
 * BOOLEAN
 * CHAR
@@ -76,12 +76,12 @@ always a valid identifier.)
 * UUID
 * VARCHAR
 
-### 3.2 Value Keywords
+### 2.3.2 Value Keywords
 * FALSE
 * NULL
 * TRUE
 
-### 3.3 Query Structure Keywords
+### 2.3.3 Query Structure Keywords
 * ADD
 * ALTER
 * ALWAYS
@@ -108,16 +108,16 @@ always a valid identifier.)
 * VIRTUAL
 
 `ALWAYS` and `GENERATED` appear together, in that fixed order, in a
-generated-column clause, followed by either `STORED` or `VIRTUAL` (§9.4);
+generated-column clause, followed by either `STORED` or `VIRTUAL` (§3.3.4);
 none of the four stands alone. Unlike PostgreSQL, where `COLUMN` may be
-omitted from `ADD`/`DROP`/`ALTER COLUMN` (§10), StruoDB requires it, for
+omitted from `ADD`/`DROP`/`ALTER COLUMN` (§3.4), StruoDB requires it, for
 the same explicitness-over-brevity reasons `CONSTRAINT constraint_name` is
-mandatory (§9.5). `ON`, `CONFLICT`, `DO`, and `NOTHING` appear together as
-the fixed sequence `ON CONFLICT DO NOTHING` (§11.5); there is no `DO
+mandatory (§3.3.5). `ON`, `CONFLICT`, `DO`, and `NOTHING` appear together as
+the fixed sequence `ON CONFLICT DO NOTHING` (§4.1.5); there is no `DO
 UPDATE` form. Built-in functions, once any are defined, are deliberately
-**not** keywords — see §8.3 for why.
+**not** keywords — see §3.2.3 for why.
 
-### 3.4 Expression Keywords
+### 2.3.4 Expression Keywords
 * AND
 * BETWEEN
 * DISTINCT
@@ -131,17 +131,17 @@ UPDATE` form. Built-in functions, once any are defined, are deliberately
 * SIMILAR
 * TO
 
-`SIMILAR` and `TO` appear together as `SIMILAR TO` (§8.1); `DISTINCT` and
-`FROM` appear together as `IS [NOT] DISTINCT FROM` (§8.1); neither stands
+`SIMILAR` and `TO` appear together as `SIMILAR TO` (§3.2.1); `DISTINCT` and
+`FROM` appear together as `IS [NOT] DISTINCT FROM` (§3.2.1); neither stands
 alone. `FROM` is not (yet) usable to introduce a table list the way it is
-in PostgreSQL's `SELECT` — see §12.
+in PostgreSQL's `SELECT` — see §5.
 
-### 3.5 PostgreSQL Reserved Words
+### 2.3.5 PostgreSQL Reserved Words
 
 None of the words below carry any meaning in StruoDB's own grammar — they
 are ordinary PostgreSQL keywords, not StruoDB ones — but an unquoted
 identifier may not be one of them either, on top of not being one of
-§3.1–§3.4's own keywords. Specifically: the keywords PostgreSQL's own
+§2.3.1–§2.3.4's own keywords. Specifically: the keywords PostgreSQL's own
 keyword list
 ([sql-keywords-appendix](https://www.postgresql.org/docs/current/sql-keywords-appendix.html),
 "PostgreSQL" column, as of PostgreSQL 18) categorizes as **reserved** or
@@ -165,7 +165,7 @@ checking every identifier regardless of how it was written; see
 `../../../plans/lang/codegen-plan.md`'s identifier-quoting design
 decision. A
 quoted identifier is unaffected — `"table"` is always valid, same as any
-other identifier, per §2.
+other identifier, per §2.2.
 
 * ALL
 * ANALYSE
@@ -272,17 +272,17 @@ other identifier, per §2.
 Twenty-four of these (`AND`, `AS`, `CHECK`, `COLUMN`, `CONSTRAINT`,
 `CREATE`, `DEFAULT`, `DISTINCT`, `DO`, `FALSE`, `FROM`, `ILIKE`, `IN`,
 `INTO`, `IS`, `LIKE`, `NOT`, `NULL`, `ON`, `OR`, `RETURNING`, `SIMILAR`,
-`TO`, `TRUE`) already appear in §3.1–§3.4 as StruoDB's own keywords, and
+`TO`, `TRUE`) already appear in §2.3.1–§2.3.4 as StruoDB's own keywords, and
 were already unusable as unquoted identifiers before this section
 existed; they're repeated here only for completeness against
 PostgreSQL's own list.
 
-## 4. Literals
+## 2.4 Literals
 
-### 4.1 Boolean and Null Literals
-Written using the keywords `TRUE`, `FALSE`, and `NULL` (§3.2).
+### 2.4.1 Boolean and Null Literals
+Written using the keywords `TRUE`, `FALSE`, and `NULL` (§2.3.2).
 
-### 4.2 Numeric Literals
+### 2.4.2 Numeric Literals
 
 Following PostgreSQL/SQL-standard form:
 
@@ -299,14 +299,14 @@ Following PostgreSQL/SQL-standard form:
   trail, double up, or sit next to the decimal point or exponent marker
   (`_1`, `1_`, `1__0`, `1_.5`, `1._5`, `1e_5` are all invalid).
 - No sign (`+`/`-`) is part of a numeric literal; a leading sign is the
-  unary arithmetic operator (§5.1) applied to the literal, per SQL
+  unary arithmetic operator (§2.5.1) applied to the literal, per SQL
   convention, not part of the token itself.
 
 Not included: PostgreSQL's `0x`/`0o`/`0b` non-decimal integer literals
 (added in PostgreSQL 16). Decimal is the only base for now; see "Remaining
 open details" below.
 
-### 4.3 String Literals
+### 2.4.3 String Literals
 
 Delimited by single quotes: `'...'`. A literal single quote inside the
 string is written by doubling it (`'it''s'`), matching PostgreSQL/the SQL
@@ -324,9 +324,9 @@ standard.
 Not included, deferred: PostgreSQL's `E'...'` backslash-escape string
 syntax and its `$$...$$` / `$tag$...$tag$` dollar-quoted strings (the
 latter mainly earns its keep for function bodies, which StruoDB doesn't
-have yet). See [Open Issues](/specifications/struoql/design-decisions#open-issues).
+have yet). See [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues).
 
-## 5. Operators and Punctuation
+## 2.5 Operators and Punctuation
 
 Multi-character operators are tokenized by longest match (maximal munch),
 matching PostgreSQL. This matters more now that several operators share a
@@ -334,7 +334,7 @@ leading character: `<` / `<=` / `<>` / `<<` / `<@`; `>` / `>=` / `>>`;
 `-` / `->` / `->>`; `#` / `#>` / `#>>`; `|` / `||`; `~` / `~*`; `!=` / `!~`
 / `!~*`.
 
-### 5.1 Arithmetic Operators
+### 2.5.1 Arithmetic Operators
 * `+`
 * `-`
 * `*`
@@ -342,7 +342,7 @@ leading character: `<` / `<=` / `<>` / `<<` / `<@`; `>` / `>=` / `>>`;
 * `%`
 * `^` — exponentiation
 
-### 5.2 Comparison Operators
+### 2.5.2 Comparison Operators
 * `=`
 * `>`
 * `<`
@@ -351,11 +351,11 @@ leading character: `<` / `<=` / `<>` / `<<` / `<@`; `>` / `>=` / `>>`;
 * `<>`
 * `!=`
 
-### 5.3 String Operators
+### 2.5.3 String Operators
 * `||` — string concatenation, matching PostgreSQL/the SQL standard
   (`'foo' || 'bar'` evaluates to `'foobar'`).
 
-### 5.4 Bitwise Operators
+### 2.5.4 Bitwise Operators
 * `&` — AND
 * `|` — OR
 * `#` — XOR
@@ -363,24 +363,24 @@ leading character: `<` / `<=` / `<>` / `<<` / `<@`; `>` / `>=` / `>>`;
 * `<<` — shift left
 * `>>` — shift right
 
-Meaningful on the integer types (§3.1: `SMALLINT`/`INT`/`INTEGER`/
+Meaningful on the integer types (§2.3.1: `SMALLINT`/`INT`/`INTEGER`/
 `BIGINT`), matching PostgreSQL's own bitwise operators. `~` is also used,
-in binary/infix position, as a regex-match operator (§5.5) — the two
+in binary/infix position, as a regex-match operator (§2.5.5) — the two
 don't conflict since PostgreSQL itself overloads `~` the same way,
 disambiguated by arity/operand type (prefix on an integer vs. infix
 between two text values) rather than by separate tokens.
 
-### 5.5 Regex Operators
+### 2.5.5 Regex Operators
 * `~` — matches (POSIX regular expression)
 * `~*` — matches, case-insensitive
 * `!~` — does not match
 * `!~*` — does not match, case-insensitive
 
-Meaningful on the string types (§3.1: `TEXT`/`CHAR`/`VARCHAR`), matching
+Meaningful on the string types (§2.3.1: `TEXT`/`CHAR`/`VARCHAR`), matching
 PostgreSQL's own regex-match operators (POSIX extended regular
 expressions).
 
-### 5.6 JSON Operators
+### 2.5.6 JSON Operators
 * `->` — get JSON object field or array element, as `JSON`/`JSONB`
 * `->>` — get JSON object field or array element, as text
 * `#>` — get JSON object at the given path, as `JSON`/`JSONB`
@@ -388,28 +388,28 @@ expressions).
 * `@>` — contains
 * `<@` — contained by
 
-Meaningful on the `JSON`/`JSONB` types (§3.1), matching PostgreSQL's own
+Meaningful on the `JSON`/`JSONB` types (§2.3.1), matching PostgreSQL's own
 JSON/JSONB operators.
 
-### 5.7 Typecast
+### 2.5.7 Typecast
 * `::` — PostgreSQL-style typecast (`expr :: data_type`), matching
   PostgreSQL directly rather than the SQL-standard `CAST(expr AS type)`
   (which isn't included — see
-  [Open Issues](/specifications/struoql/design-decisions#open-issues)).
+  [Open Issues](/specifications/struoql/design-decisions#a-2-open-issues)).
 
-### 5.8 Punctuation
+### 2.5.8 Punctuation
 * `(` `)` — grouping
 * `,` — list separator
 * `;` — statement terminator
 * `.` — qualified-name separator
 
-### 5.9 Context-Dependent Symbols
+### 2.5.9 Context-Dependent Symbols
 * `*` also serves double duty as the arithmetic multiplication operator
-  (§5.1) and, in SQL, conventionally as a "select all columns" wildcard.
+  (§2.5.1) and, in SQL, conventionally as a "select all columns" wildcard.
   Which meanings apply, and how the grammar disambiguates them, is not yet
   defined.
 
-## 6. Comments
+## 2.6 Comments
 
 * `-- ...` — single-line comment, extending to the end of the line.
 * `/* ... */` — multi-line (block) comment. These nest, matching
