@@ -1,4 +1,4 @@
-# 2. Struo Query Language — Specification
+# 2. StruoQL — Lexical Specification
 
 ## 2.1 Case Sensitivity
 
@@ -28,20 +28,20 @@ StruoDB follows PostgreSQL conventions:
   describes the identifier's meaning once it reaches PostgreSQL — since
   StruoDB transpiles straight to PostgreSQL SQL, PostgreSQL's own
   truncation (already correct and encoding-aware) is what actually
-  applies; nothing here requires StruoDB itself to perform or replicate
-  that truncation before then.
+  applies; StruoDB itself performs no truncation before then.
 - **Reserved words**: an unquoted identifier may not be one of StruoDB's
-  own keywords (§2.3) or one of PostgreSQL's own reserved keywords (§2.3.5)
-  either — quoting is required to use such a word as an identifier.
+  own keywords (§2.3) or one of PostgreSQL's reserved keywords (§2.3.5)
+  — quoting is required to use such a word as an identifier.
 - **Reserved prefix**: a *new* stream, column, or constraint name (i.e.
   one being declared, not merely referenced) may not start with `_STRUO_`,
-  case-insensitively, quoted or not — reserved for the automatic system
+  case-insensitively, quoted or not. This prefix is reserved for the 
+  automatic system
   columns (§3.3.2) and future system use. Unlike the length limit above,
   this is a compile-time error, not silent truncation/passthrough. It's
-  checked only where a name is declared (`CREATE STREAM`/`ALTER STREAM`);
-  *referencing* an existing `_STRUO_`-prefixed name (a `column_ref`, a
+  checked only where a name is declared (`CREATE STREAM`/`ALTER STREAM`).
+  *Referencing* an existing `_STRUO_`-prefixed name (a `column_ref`, a
   `RETURNING` item) is unrestricted — it either names a real column and
-  resolves normally, or it doesn't and is already an ordinary "unknown
+  resolves normally, or it doesn't and is thus an ordinary "unknown
   column"/"unknown stream" error.
 
 ## 2.3 Keywords

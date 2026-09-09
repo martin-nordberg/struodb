@@ -1,6 +1,6 @@
-# 4. StruoDB Query Language — Event Creation
+# 5. StruoQL — Event Creation
 
-## 4.1 INSERT
+## 5.1 INSERT
 
 `INSERT` appends events to a stream. It follows standard SQL/PostgreSQL
 `INSERT` closely, with restrictions and one addition specific to how
@@ -10,7 +10,7 @@ columns excluded from it entirely, and an idempotency mechanism
 twice is a normal occurrence for an event-sourcing client, not just an
 edge case.
 
-### 4.1.1 Synopsis
+### 5.1.1 Synopsis
 
 ```
 insert_stmt ::= INSERT INTO stream_name '(' column_name (',' column_name)* ')'
@@ -32,7 +32,7 @@ doesn't repeat `STREAM` after `INTO` — matching plain SQL's
 `INSERT INTO table_name` rather than this spec's own `CREATE`/`ALTER`
 pattern.
 
-### 4.1.2 Column List
+### 5.1.2 Column List
 
 The column list is **mandatory** — `INSERT INTO stream VALUES (...)` with
 no column list, relying on `CREATE STREAM`'s declared column order, is not
@@ -42,29 +42,29 @@ that positional form: an explicit list is self-documenting and immune to
 
 The list may still be a **subset** of the stream's columns — any column
 left out is resolved the same way a bare `DEFAULT` value would be
-(§4.1.3): its own `DEFAULT`/`GENERATED` clause if it has one, `NULL` if
+(§5.1.3): its own `DEFAULT`/`GENERATED` clause if it has one, `NULL` if
 it's `OPTIONAL` with neither, or an insert-time error if it's `NOT NULL`
 with neither. The 5 automatic system columns (§3.3.2) may **never** appear
-in the column list at all — the same restriction §4.1.4 states for
+in the column list at all — the same restriction §5.1.4 states for
 `GENERATED` columns — so they're always "left out," and never hit that
 insert-time error: 4 of them resolve to that row's freshly-drawn HLC
 value; the 5th, `_struo_created_at`, resolves to its own `DEFAULT
 clock_timestamp()` exactly like an ordinary `DEFAULT` column left out of
 the list.
 
-### 4.1.3 Values
+### 5.1.3 Values
 
 Each `value_row` supplies one value per column in the column list,
 positionally. A `value` is either a general expression (§3.2) or the bare
 keyword `DEFAULT`, which stands for that column's own `DEFAULT` expression
 (§3.3.4) — or `NULL`, if the column is `OPTIONAL` and has no `DEFAULT` — the
-same resolution described in §4.1.2 for an omitted column, just spelled out
+same resolution described in §5.1.2 for an omitted column, just spelled out
 explicitly instead of left out.
 
 There's no `INSERT ... SELECT` form — only `VALUES` — since no querying
 grammar exists yet (§5).
 
-### 4.1.4 Generated and System Columns
+### 5.1.4 Generated and System Columns
 
 A column declared `GENERATED ALWAYS AS (...)` (§3.3.4) may **never** appear
 in the column list, not even paired with the `DEFAULT` placeholder value.
@@ -80,9 +80,9 @@ client-supplied. 4 of them, codegen draws a fresh HLC value per row from
 a live clock instance and fills them in itself; the 5th,
 `_struo_created_at`, is left for PostgreSQL to fill in via its own
 `DEFAULT clock_timestamp()`, the same as any other omitted `DEFAULT`
-column (§4.1.2).
+column (§5.1.2).
 
-### 4.1.5 Conflict Handling
+### 5.1.5 Conflict Handling
 
 `ON CONFLICT DO NOTHING`, if present, makes a duplicate `_struo_hlc` value
 a silent no-op instead of a `PRIMARY KEY`-violation error — for absorbing
@@ -103,7 +103,7 @@ so only the no-op form is offered.
 The clause is optional. Without it, a duplicate `_struo_hlc` is a hard
 error, exactly as it would be in plain SQL.
 
-### 4.1.6 RETURNING
+### 5.1.6 RETURNING
 
 `RETURNING` mirrors PostgreSQL: `*` for every column of the inserted row,
 or a comma-separated list of expressions (each optionally aliased with
@@ -111,11 +111,11 @@ or a comma-separated list of expressions (each optionally aliased with
 including any `GENERATED` column's computed value (§3.3.4), which is
 otherwise not knowable to the client in advance. One result row is
 returned per row actually inserted; a row skipped by
-`ON CONFLICT DO NOTHING` (§4.1.5) produces no `RETURNING` output at all, so
+`ON CONFLICT DO NOTHING` (§5.1.5) produces no `RETURNING` output at all, so
 `RETURNING` doubles as a way to tell whether a given retry actually
 inserted anything new.
 
-### 4.1.7 Example
+### 5.1.7 Example
 
 ```
 INSERT INTO sensor_reading (reading, units, sensor_id)
@@ -125,8 +125,8 @@ RETURNING _struo_hlc;
 ```
 
 (The 5 automatic system columns are correctly omitted from the column
-list per §4.1.4; `_struo_hlc` reads back the value codegen actually
-assigned this row via `RETURNING`, per §4.1.6. `notes`, `OPTIONAL` with no
+list per §5.1.4; `_struo_hlc` reads back the value codegen actually
+assigned this row via `RETURNING`, per §5.1.6. `notes`, `OPTIONAL` with no
 `DEFAULT`, is omitted
-from the column list and resolves to `NULL` per §4.1.2.)
+from the column list and resolves to `NULL` per §5.1.2.)
 

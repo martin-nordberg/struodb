@@ -1,4 +1,4 @@
-# A. Struo Query Language — Design Decisions History
+# A. StruoQL — Design Decisions History
 
 ## A.1 Settled Design Decisions
 

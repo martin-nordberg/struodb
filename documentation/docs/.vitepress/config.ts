@@ -19,13 +19,25 @@ export default defineConfig({
     sidebar: {
       '/specifications/': [
         {
+          text: 'Architecture',
+          collapsed: true,
+          items: [
+            {text: '1. Overview', link: '/specifications/architecture/overview'},
+            {text: '2. Event Collectors', link: '/specifications/architecture/event-collectors'},
+            {text: '3. Event Aggregators', link: '/specifications/architecture/event-aggregators'},
+            {text: '4. Event Propagation', link: '/specifications/architecture/event-propagation'},
+            {text: '5. Event Projectors', link: '/specifications/architecture/event-projectors'},
+          ]
+        },
+        {
           text: 'StruoQL',
           collapsed: true,
           items: [
             {text: '1. Overview', link: '/specifications/struoql/overview'},
             {text: '2. Lexical Spec', link: '/specifications/struoql/lexical-spec'},
-            {text: '3. Schema Definition', link: '/specifications/struoql/ddl-spec'},
-            {text: '4. Event Creation', link: '/specifications/struoql/dml-spec'},
+            {text: '3. Expressions', link: '/specifications/struoql/expressions'},
+            {text: '4. Schema Definition', link: '/specifications/struoql/ddl-spec'},
+            {text: '5. Event Creation', link: '/specifications/struoql/dml-spec'},
             {text: 'A. Design Decisions', link: '/specifications/struoql/design-decisions'},
           ]
         },
@@ -51,7 +63,7 @@ export default defineConfig({
     },
 
     outline: {
-      level: [2, 2]
+      level: [2, 3]
     },
 
     socialLinks: [

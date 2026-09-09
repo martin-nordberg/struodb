@@ -7,6 +7,9 @@ hero:
   tagline: Events - sourced, merged and projected
   actions:
     - theme: brand
+      text: Architecture
+      link: /specifications/architecture/overview
+    - theme: brand
       text: Specifications
       link: /specifications/struoql/overview
     - theme: alt
