@@ -221,4 +221,59 @@ pub fn multiple_actions_in_sequence_all_apply_test() {
     == list.append(system_column_names, ["reading"])
   assert sorted_keys(schema.constraints) == ["reading_in_range"]
 }
+
+//-----------------------------------------------------------------------------
+// Migration tracking (catalog.set_migration_hashes)
+//-----------------------------------------------------------------------------
+
+pub fn create_stream_starts_migration_hashes_empty_test() {
+  let assert Ok(schema) = dict.get(base_catalog().streams, "sensor_reading")
+  assert schema.migration_hashes == []
+}
+
+pub fn set_migration_hashes_replaces_the_list_test() {
+  let updated =
+    catalog.set_migration_hashes(base_catalog(), "sensor_reading", [
+      "hash-0", "hash-1",
+    ])
+  let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
+  assert schema.migration_hashes == ["hash-0", "hash-1"]
+
+  // A second call replaces, rather than appends to, the first.
+  let replaced =
+    catalog.set_migration_hashes(updated, "sensor_reading", ["hash-0"])
+  let assert Ok(replaced_schema) = dict.get(replaced.streams, "sensor_reading")
+  assert replaced_schema.migration_hashes == ["hash-0"]
+}
+
+/// Every other ALTER STREAM primitive leaves `migration_hashes` alone —
+/// it's only ever touched by `set_migration_hashes` itself.
+pub fn alter_actions_leave_migration_hashes_untouched_test() {
+  let with_hashes =
+    catalog.set_migration_hashes(base_catalog(), "sensor_reading", ["hash-0"])
+
+  let updated =
+    with_hashes
+    |> catalog.add_column(
+      "sensor_reading",
+      catalog.ColumnSchema(
+        name: "notes",
+        data_type: xast.DtVarchar(None),
+        optional: True,
+        default: None,
+        generated: None,
+        system: False,
+      ),
+    )
+    |> catalog.drop_column("sensor_reading", "units")
+    |> catalog.alter_column_type("sensor_reading", "reading", xast.DtDouble)
+    |> catalog.add_constraint(
+      "sensor_reading",
+      named_check("notes_present", xast.BoolLiteral(True)),
+    )
+    |> catalog.drop_constraint("sensor_reading", "units_not_empty")
+  let assert Ok(schema) = dict.get(updated.streams, "sensor_reading")
+
+  assert schema.migration_hashes == ["hash-0"]
+}
 //-----------------------------------------------------------------------------

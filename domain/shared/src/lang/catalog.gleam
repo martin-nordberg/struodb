@@ -39,6 +39,14 @@ pub type StreamSchema {
     name: String,
     columns: Dict(String, ColumnSchema),
     constraints: Dict(String, NamedCheck),
+    /// SHA-256 hex hashes (`ddl_hash.gleam`, schema/) of every
+    /// `CREATE`/`ALTER STREAM` statement applied to this stream so far,
+    /// in application order — `create_stream` starts this at `[]`;
+    /// `ddl_migration.gleam` (schema/) is the only thing that ever sets
+    /// it to something else, via `set_migration_hashes` below. Untouched
+    /// by `add_column`/`drop_column`/etc., same as `name` isn't touched
+    /// by unrelated primitives.
+    migration_hashes: List(String),
   )
 }
 
@@ -188,6 +196,7 @@ pub fn create_stream(
         col.name
       }),
       constraints: index_by(constraints, fn(check) { check.constraint_name }),
+      migration_hashes: [],
     )
   Catalog(streams: dict.insert(catalog.streams, name, schema))
 }
@@ -271,6 +280,26 @@ pub fn drop_constraint(
       ..schema,
       constraints: dict.delete(schema.constraints, constraint_name),
     )
+  })
+}
+
+//-----------------------------------------------------------------------------
+// Migration tracking (see documentation/plans/lang/migration-plan.md)
+//-----------------------------------------------------------------------------
+
+/// Replaces `stream`'s recorded migration hash list outright, rather
+/// than appending one at a time — `ddl_migration.gleam` (schema/) always
+/// has the complete final list (previously-applied ++ newly-applied, in
+/// order) in hand by the time it calls this, so a plain setter avoids
+/// any risk of an incremental appender getting order or count wrong
+/// across the replayed-vs-new split.
+pub fn set_migration_hashes(
+  catalog: Catalog,
+  stream: String,
+  hashes: List(String),
+) -> Catalog {
+  update_schema(catalog, stream, fn(schema) {
+    StreamSchema(..schema, migration_hashes: hashes)
   })
 }
 

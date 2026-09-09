@@ -68,10 +68,32 @@ fn validate_all(
   case statements {
     [] -> Ok(catalog)
     [stmt, ..rest] ->
-      case ddl_semantics.analyze(catalog, stmt) {
+      case validate_statement(catalog, stmt, index) {
         Ok(next_catalog) -> validate_all(next_catalog, rest, index + 1)
-        Error(errors) -> Error(SemanticFailure(index, errors))
+        Error(err) -> Error(err)
       }
+  }
+}
+
+/// Validates one already-parsed statement against `catalog`, wrapping a
+/// failure into `SemanticFailure(index, ..)` — the per-statement step
+/// `validate_all`'s own fold above is built from. Exposed as `pub` so
+/// `ddl_migration.gleam` (see
+/// documentation/plans/lang/migration-plan.md) can reuse this exact
+/// step — same `ddl_semantics.analyze`-and-wrap behavior, same error
+/// shape `apply_ddl`'s callers already see — without its own copy or a
+/// direct `ddl_semantics` dependency. `index` is a caller-supplied
+/// 0-based position, not necessarily this statement's index within some
+/// larger list `ddl_migration.gleam` is itself iterating (it skips
+/// *rendering*, not *validating*, some statements — see that module).
+pub fn validate_statement(
+  catalog: Catalog,
+  stmt: ast.DdlStatement,
+  index: Int,
+) -> Result(Catalog, CodegenError) {
+  case ddl_semantics.analyze(catalog, stmt) {
+    Ok(next_catalog) -> Ok(next_catalog)
+    Error(errors) -> Error(SemanticFailure(index, errors))
   }
 }
 
