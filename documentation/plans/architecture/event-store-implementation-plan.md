@@ -9,6 +9,22 @@ covers concrete module layout, signatures, and build order, and resolves
 a few points that were left ambiguous or informally sketched there (see
 "Decisions carried over from discussion").
 
+**Status: implemented**, per "Step-by-step build order" below — every
+phase's Gleam/TypeScript code and test suite is in place, with
+`gleam test --runtime bun`/`gleam format --check` green across every
+`domain/*` package and `tsc --noEmit`/`bun test` green across
+`service/` and every `services/*` package. See "Implementation notes"
+near the end for where reality diverged from this plan's original
+sketch (a real caller of Phase 2's `threshold_for_time` never
+materialized once event-stores.md's own retention wording was
+implemented as written, `services/hlc-clock` didn't exist yet when
+Phase 2 was drafted, and Phase 13's original sketch had a real bug in
+its aggregator-registration loop). No real Postgres instance is
+available in the environment this was implemented in, so every
+database-touching test uses a small in-memory fake `DatabaseClient`
+rather than a live one — see the "Test plan" section's own note on this;
+the real-Postgres integration suite it describes has not been run.
+
 ## Scope
 
 **In scope**:
@@ -135,11 +151,11 @@ a few points that were left ambiguous or informally sketched there (see
 ```
 domain/
   shared/src/lang/catalog.gleam         # + migration_history_table_name, pending_aggregations_table_name
-  shared/src/hlc/clock.gleam            # + threshold_for_time
   schema/src/lang/ddl_codegen.gleam     # create_stream_to_sql emits 2 more CREATE TABLEs
   streams/src/lang/dml_codegen.gleam    # generate/insert_to_sql take aggregators_for_stream, emit CTE fan-out
   streams/src/dml_facade.gleam          # apply_insert signature grows aggregators_for_stream
 services/
+  hlc-clock/                # HlcClock — moved out of service/, see "Implementation notes"
   database-repo/            # Bun SQL client: run generated SQL, structured bulk insert, migration-history + pending-aggregations + retention queries
   schema-migration/         # wraps ddl_facade.apply_migration + database-repo (§2.6.1)
   event-creation/           # wraps dml_facade.apply_insert + database-repo (§2.6.3)
@@ -147,18 +163,24 @@ services/
   event-delivery/           # queries + delivers + deletes pending_aggregations rows (§2.6.4)
   event-obsolescence/       # retention sweep (§2.6.5)
   event-store/              # composes the above; owns Event Store Configuration parsing + Application Initialization (§2.5, §2.6.2)
-service/                    # unchanged — still the throwaway smoke-test app, not wired to services/*
+service/                    # still the throwaway smoke-test app — depends on services/hlc-clock now, nothing else
 package.json                # workspaces: ["service", "services/*"]
 ```
 
+(`hlc/clock.gleam` itself is untouched by this plan — no `threshold_for_time`
+after all; see "Implementation notes.")
+
 Each `services/*` package gets its own `package.json` (`private: true`,
-`type: module`), `tsconfig.json` extending a shared root config, `src/`,
-`test/` — the same shape `service/` already has, one level down. None of
-them import compiled Gleam output directly except `schema-migration` and
-`event-creation`, which take over that role from `service/`'s bridges for
-their own two facades (see "Facades and the TypeScript boundary" in root
-`CLAUDE.md` — the "only these files may import `domain/*/build/...`"
-rule now applies per-package rather than only inside `service/`).
+`type: module`, an `"exports"` field pointing at `src/index.ts` — see
+"Implementation notes" on why that turned out to be necessary),
+`tsconfig.json` extending a shared root config, `src/`, `test/` — the
+same shape `service/` already has, one level down. None of them import
+compiled Gleam output directly except `hlc-clock`, `schema-migration`,
+and `event-creation`, which take over that role from `service/`'s
+bridges for their own boundary (see "Facades and the TypeScript
+boundary" in root `CLAUDE.md` — the "only these files may import
+`domain/*/build/...`" rule now applies per-package rather than only
+inside `service/`).
 
 ## Phase 1 — `catalog.gleam`: table-name helpers
 
@@ -960,6 +982,77 @@ cross-cutting suites:
     the first `services/*` package exists, so CI covers it from the
     start) rather than saving it for the end.
 
+## Implementation notes (how this actually landed)
+
+Written after building the plan above end to end — kept as a record of
+where reality diverged from the sketch, per
+`documentation/plans/lang/migration-plan.md`'s own "Implementation
+notes" precedent, not repeated in each phase above.
+
+- **`HlcClock` moved to its own package, `services/hlc-clock`, rather
+  than staying in `service/`.** Phase 2's sketch amended `service/src/
+  hlc-clock.ts` in place, since that was the only place it lived at the
+  time this plan was written. Once Phase 9's `event-creation` and Phase
+  13's `event-store` also needed a real `HlcClock` — and `service/` is
+  explicitly out of scope, throwaway scaffolding (see "Scope") — leaving
+  it there would have meant either a real package depending on the
+  throwaway app, or a second copy. Extracted instead: `service/`
+  depends on `services/hlc-clock` via `workspace:*`, with no behavior
+  change to the class itself.
+- **`threshold_for_time`/`HlcClock.thresholdForTime` were removed, not
+  built into Phase 12.** Phase 2 added these on the assumption a
+  retention strategy would want an HLC-range cutoff on `_struo_hlc`. By
+  the time Phase 12 was actually implemented, event-stores.md's own
+  §2.3.4 had been corrected to say `timeLimited` means
+  `_struo_created_at` specifically, *not* `_struo_hlc_timestamp` (an
+  HLC's physical-time component can run ahead of true wall-clock time
+  after a merge, per hlc-spec.md — exactly the wrong notion of "age"
+  here) — and the two strategies that *would* have wanted a pure
+  `_struo_hlc` cutoff (Size-Limited/Age-limited) had already been
+  removed from the spec before this plan was written. With no
+  retention strategy left that uses it, `threshold_for_time` had no real
+  caller anywhere in this implementation. Removed both rather than
+  shipping tested-but-dead code, following the precedent
+  `ddl_migration.gleam`'s `EmptyMigration` removal set (see
+  `documentation/plans/lang/migration-plan.md`): `sweepStream`'s
+  `timeLimited` branch compares a plain wall-clock `Date` against
+  `_struo_created_at` directly instead.
+- **Phase 13's original registration-loop sketch had a real bug**, caught
+  while implementing it rather than by inspection: calling
+  `schema-migration.migrateStream` a second time — for the aggregator's
+  *own* reported migration, right after already calling it once for the
+  stream's locally-configured one — would always throw
+  `StreamAlreadyExists`, since `ddl_facade.apply_migration` refuses a
+  catalog that already contains the stream (by design; see
+  `documentation/plans/lang/migration-plan.md`'s own still-open question
+  on this). `start()` instead calls `registerWithAggregator` once per
+  aggregator and compares its reported migration text against the
+  stream's local one for equality, throwing `SchemaMismatchError` on a
+  mismatch rather than re-running it — verified by a test that would
+  otherwise have caught this at the first real call, not before.
+- **`start()` gained an `options: { db?, fetchImpl? }` parameter** not
+  in the original sketch, purely for testability: without a seam to
+  inject a fake `DatabaseClient`/`fetch`, nothing above the individual
+  `services/*` packages could be tested without a live Postgres and a
+  live aggregator HTTP endpoint, neither available in the environment
+  this was implemented in.
+- **Every `services/*` `package.json` needed an explicit `"exports": {
+  ".": "./src/index.ts" }` field.** Without it, `tsc`'s `bundler`
+  module-resolution mode couldn't resolve a workspace package with no
+  `main`/`types` field, even though Bun's own runtime resolution (and
+  the `node_modules` symlink `bun install` creates for a `workspace:*`
+  dependency) had no trouble with it.
+- **Every database-touching test uses a small in-memory fake
+  `DatabaseClient`**, not a real Postgres instance — none was available
+  in the environment this was implemented in. Each fake understands only
+  the exact query shapes its own package's production code issues (see
+  each package's own `test/fake-database-client.ts`), including a
+  hand-rolled simulation of `ON DELETE CASCADE` for the retention tests.
+  This exercises real control flow (including, for `schema-migration`
+  and `event-creation`, the actual compiled Gleam facades) but is not a
+  substitute for the real-Postgres integration suite the "Test plan"
+  section above describes, which has not been run.
+
 ## Open questions
 
 - **Should the node-id bound be enforced in the database too?**
@@ -976,12 +1069,25 @@ cross-cutting suites:
   changed. Leaning toward skipping it (the width hasn't changed since
   hlc-spec.md was written, and won't without a spec revision), but
   worth a second look during Phase 3.
-- **`services/schema-migration`/`event-creation` importing compiled
-  Gleam output from separate packages.** Root `CLAUDE.md`'s "only
-  `service/src/bridges/*` may import `domain/*/build/...` directly" rule
-  needs an explicit update once these two packages exist — noted here,
-  not fixed, since it's a documentation change contingent on this plan
-  actually landing.
+- ~~**`services/schema-migration`/`event-creation` importing compiled
+  Gleam output from separate packages.**~~ Resolved during
+  implementation: root `CLAUDE.md`'s rule is now stated per-package
+  (see its "TypeScript application layer"/"Event store services"
+  sections) rather than repo-wide.
+- **Retention declared per aggregator, enforced per stream.**
+  event-stores.md §2.5 declares a retention strategy *per aggregator
+  entry* in a stream's config, but deleting a stream row (Phase 12's
+  `sweepStream`) is a whole-stream action — `_pending_aggregations`' `ON
+  DELETE CASCADE` drops every aggregator's own pending row for that
+  event at once, not just one aggregator's. Phase 13's
+  `effectiveRetentionStrategy` resolves this by taking the most
+  conservative combination across a stream's aggregators (`indefinite`
+  if any asks for it, otherwise the largest `threshold`/`intervalMs`) —
+  a reasonable, documented interpretation, but a genuine reading of an
+  underspecified corner of event-stores.md's own data model, not
+  something the spec settles. Worth confirming against the spec's
+  actual intent before relying on it for a stream whose aggregators
+  configure meaningfully different retention strategies.
 - **Batch-by-size fan-in.** Phase 13 sketches a "check after every
   `createEvents` call" trigger for `batchBySize`, but doesn't define
   where the size threshold is actually tracked (a `SELECT count(*)` per

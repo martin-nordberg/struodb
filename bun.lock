@@ -49,8 +49,13 @@
       "name": "event-store",
       "version": "1.0.0",
       "dependencies": {
+        "aggregator-registration": "workspace:*",
         "database-repo": "workspace:*",
+        "event-creation": "workspace:*",
+        "event-delivery": "workspace:*",
+        "event-obsolescence": "workspace:*",
         "hlc-clock": "workspace:*",
+        "schema-migration": "workspace:*",
       },
     },
     "services/hlc-clock": {

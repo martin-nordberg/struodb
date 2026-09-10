@@ -9,7 +9,12 @@ name: test
 # domain/* package's build/test/format-check independent of the others
 # (the property the old layout was going for), plus one job for
 # service/, which needs every domain/* package built first since its
-# bridges import their compiled output.
+# bridges import their compiled output, plus a matrix job for every
+# services/* package (see
+# documentation/plans/architecture/event-store-implementation-plan.md,
+# Phase 14) — each independent of the others the same way domain/*'s own
+# matrix is, and each gets its own `bun install` so its workspace
+# dependencies (and, where needed, a domain/* build) are in place first.
 
 on:
   push:
@@ -43,3 +48,26 @@ jobs:
       - run: bun run build:domain
       - run: bun run --cwd service build
       - run: bun run --cwd service test
+
+  services:
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          [
+            aggregator-registration,
+            database-repo,
+            event-creation,
+            event-delivery,
+            event-obsolescence,
+            event-store,
+            hlc-clock,
+            schema-migration,
+          ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v2
+      - run: bun install
+      - run: bun run --cwd services/${{ matrix.package }} build
+      - run: bun run --cwd services/${{ matrix.package }} test

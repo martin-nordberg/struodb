@@ -7,8 +7,13 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "aggregator-registration": "workspace:*",
     "database-repo": "workspace:*",
-    "hlc-clock": "workspace:*"
+    "event-creation": "workspace:*",
+    "event-delivery": "workspace:*",
+    "event-obsolescence": "workspace:*",
+    "hlc-clock": "workspace:*",
+    "schema-migration": "workspace:*"
   },
   "scripts": {
     "prebuild": "bun run --cwd ../.. build:domain",
