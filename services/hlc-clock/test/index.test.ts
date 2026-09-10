@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HlcClock, MAX_NODE_ID } from "../src/hlc-clock.ts";
+import { HlcClock, MAX_NODE_ID } from "../src/index.ts";
 
 // Ports clock_keeper_test.gleam's assertions to the TypeScript-held
 // state that replaced the actor — see hlc-clock.ts's header comment.

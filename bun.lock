@@ -11,6 +11,25 @@
     "service": {
       "name": "service",
       "version": "1.0.0",
+      "dependencies": {
+        "hlc-clock": "workspace:*",
+      },
+    },
+    "services/database-repo": {
+      "name": "database-repo",
+      "version": "1.0.0",
+    },
+    "services/event-store": {
+      "name": "event-store",
+      "version": "1.0.0",
+      "dependencies": {
+        "database-repo": "workspace:*",
+        "hlc-clock": "workspace:*",
+      },
+    },
+    "services/hlc-clock": {
+      "name": "hlc-clock",
+      "version": "1.0.0",
     },
   },
   "packages": {
@@ -19,6 +38,12 @@
     "@types/node": ["@types/node@26.4.1", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-k97ENvZWtvA6yqz5/FS6a7duDgOPEeOQOc2iKS/nY6mX6qJUKtLnWzQS+Xj6tXweyj6ZcTAK2Qecetnvi9nCLA=="],
 
     "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
+
+    "database-repo": ["database-repo@workspace:services/database-repo"],
+
+    "event-store": ["event-store@workspace:services/event-store"],
+
+    "hlc-clock": ["hlc-clock@workspace:services/hlc-clock"],
 
     "service": ["service@workspace:service"],
 

@@ -1,16 +1,19 @@
 {
-  "name": "service",
+  "name": "event-store",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
+    "database-repo": "workspace:*",
     "hlc-clock": "workspace:*"
   },
   "scripts": {
-    "prebuild": "bun run --cwd .. build:domain",
+    "prebuild": "bun run --cwd ../.. build:domain",
     "build": "bun run prebuild && tsc --noEmit",
     "pretest": "bun run prebuild",
-    "test": "bun test",
-    "dev": "bun run prebuild && bun run src/main.ts"
+    "test": "bun test"
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { applyDdl, emptyCatalog } from "../src/bridges/schema-bridge.ts";
 import { applyInsert } from "../src/bridges/streams-bridge.ts";
-import { HlcClock } from "../src/hlc-clock.ts";
+import { HlcClock } from "hlc-clock";
 
 // Thin: confirms a real compiled-Gleam round trip through the bridge —
 // including the `() => clock.nextParts()` closure crossing back into

@@ -1,0 +1,15 @@
+{
+  "name": "hlc-clock",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "prebuild": "bun run --cwd ../.. build:domain",
+    "build": "bun run prebuild && tsc --noEmit",
+    "pretest": "bun run prebuild",
+    "test": "bun test"
+  }
+}

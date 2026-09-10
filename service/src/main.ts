@@ -16,12 +16,12 @@
 import * as readline from "node:readline";
 import { emptyCatalog, applyDdl, type CatalogHandle } from "./bridges/schema-bridge.ts";
 import { applyInsert } from "./bridges/streams-bridge.ts";
-import { HlcClock } from "./hlc-clock.ts";
+import { HlcClock } from "hlc-clock";
 
 const QUIT_SENTINELS = new Set(["~quit", "~q"]);
 
-/** A plain integer, `0 <= nodeId <= HlcClock.MAX_NODE_ID` — see
- *  `hlc-clock.ts`. Read from `STRUODB_NODE_ID`, falling back to a
+/** A plain integer, `0 <= nodeId <= HlcClock.MAX_NODE_ID` — see the
+ *  `hlc-clock` package. Read from `STRUODB_NODE_ID`, falling back to a
  *  single-node development default; a real multi-node deployment's
  *  config source is not this migration's concern (see the plan's
  *  "Explicitly deferred" section). */

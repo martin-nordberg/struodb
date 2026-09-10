@@ -129,18 +129,31 @@ over an opaque `ClockState` — no actor, no mutable state, no
 `gleam/erlang`/`gleam/otp` dependency at all.
 
 There is no Gleam-side actor wrapper any more (the pre-migration
-`clock_keeper.gleam` is gone). `service/src/hlc-clock.ts`'s `HlcClock`
-class is what replaced it: a plain TypeScript class holding one
-`ClockState` (imported opaquely from compiled Gleam output, never
-constructed or inspected — see that file's header comment) and calling
-straight through to `clock.new$`/`next`/`next_parts`/`merge` on each
-method call, the same "one clock per process, called synchronously" role
-`clock_keeper.gleam`'s actor used to play. `service/src/main.ts`
-constructs the one `HlcClock` a process uses and passes it to whichever
-bridge needs it (today, `streams-bridge.ts`, for `INSERT`'s per-row HLC
-stamping). The lexicographic-order-equals-value-order invariant
-(fixed-width, zero-padded fields; monotonic alphabet) is load-bearing —
-any change to field widths or the alphabet breaks it.
+`clock_keeper.gleam` is gone). `services/hlc-clock`'s `HlcClock` class is
+what replaced it: a plain TypeScript class holding one `ClockState`
+(imported opaquely from compiled Gleam output, never constructed or
+inspected — see that package's header comment) and calling straight
+through to `clock.new$`/`next`/`next_parts`/`merge` on each method call,
+the same "one clock per process, called synchronously" role
+`clock_keeper.gleam`'s actor used to play. It also owns the
+integer-node-id boundary (see below) and `thresholdForTime`, a synthetic
+zero-counter/zero-node-id HLC value a retention sweep range-scans
+`_struo_hlc` against directly. `service/src/main.ts` constructs the one
+`HlcClock` a process uses and passes it to whichever bridge needs it
+(today, `streams-bridge.ts`, for `INSERT`'s per-row HLC stamping);
+`services/event-creation`/`services/event-store` are the other real
+callers (see
+`documentation/plans/architecture/event-store-implementation-plan.md`).
+The lexicographic-order-equals-value-order invariant (fixed-width,
+zero-padded fields; monotonic alphabet) is load-bearing — any change to
+field widths or the alphabet breaks it.
+
+Node ids are plain integers everywhere except as an HLC's own
+5-character base-62 subfield (bounded `0..916_132_831`, i.e. `62^5 - 1`)
+— `hlc/clock.gleam`'s own `new`/`start` still takes that pre-encoded
+5-character string unchanged; `HlcClock.create` in `services/hlc-clock`
+is the one place a plain integer becomes it, via `hlc/base62.gleam`'s
+already-public `encode`.
 
 ### The StruoDB query language front end (`lang/`, split across `domain/shared`/`domain/schema`/`domain/streams`)
 
@@ -297,22 +310,48 @@ to call directly from Gleam.
 the hexagonal split explored in
 `documentation/docs/public/x-designs/ideas/Gleam-TypeScript-Hexagonal-Architecture.pdf`
 (no "driven adapter"/persistence layer exists yet; see the migration
-plan's "Explicitly deferred" section). `src/main.ts` is the composition
-root: builds one `HlcClock` (`src/hlc-clock.ts`) and one `CatalogHandle`
+plan's "Explicitly deferred" section). Per the note added to
+`documentation/docs/specifications/architecture/event-stores.md` §2.2,
+this app is throwaway scaffolding for TypeScript-calls-Gleam smoke
+testing — the real driving-adapter work is moving to `services/`, below.
+`src/main.ts` is the composition root: builds one `HlcClock`
+(`services/hlc-clock`) and one `CatalogHandle`
 (`schema-bridge.emptyCatalog()`), then reads StruoQL statements from
 stdin, routing `CREATE`/`ALTER` text to `schema-bridge.applyDdl` and
 everything else to `streams-bridge.applyInsert`, threading the catalog
 handle from each `applyDdl` call into the next.
 
 `src/bridges/schema-bridge.ts` and `src/bridges/streams-bridge.ts` are the
-*only* files allowed to import a `domain/*/build/dev/javascript/...` path
-directly (Gleam emits no `.d.ts`, so these imports carry a `@ts-expect-
-error` and everything they return is cast to an explicit local type) —
-every other TypeScript file calls their typed wrapper functions instead.
-Each corresponding domain package must be built (`gleam build`, or `bun
-run build:domain` from the repo root) before `service/` can import its
-compiled output — `service/package.json`'s `prebuild`/`pretest` scripts do
-this automatically.
+only files *inside `service/`* allowed to import a
+`domain/*/build/dev/javascript/...` path directly (Gleam emits no
+`.d.ts`, so these imports carry a `@ts-expect-error` and everything they
+return is cast to an explicit local type) — every other file in
+`service/` calls their typed wrapper functions instead. This rule is now
+per-package rather than repo-wide: `services/hlc-clock` (and, per the
+implementation plan below, `services/schema-migration`/
+`services/event-creation`) also import compiled Gleam output directly,
+each being the sole such file in its own package. Each corresponding
+domain package must be built (`gleam build`, or `bun run build:domain`
+from the repo root) before any of these can import its compiled output —
+their own `package.json`'s `prebuild`/`pretest` scripts do this
+automatically.
+
+### Event store services (`services/`)
+
+`services/*` is a growing set of small, independent Bun/TypeScript
+packages (each its own `package.json`/`tsconfig.json extending
+../../tsconfig.base.json`, workspace-referenced via `"workspace:*"`)
+implementing the Event Store components in
+`documentation/docs/specifications/architecture/event-stores.md`
+§2.4/§2.7 — `services/hlc-clock` (the `HlcClock` class, above),
+`services/database-repo` (the one package that actually talks to
+PostgreSQL, via `Bun.SQL`), and more per
+`documentation/plans/architecture/event-store-implementation-plan.md`'s
+own phases as they land. `service/` (singular) does not depend on any of
+these except `hlc-clock` — it stays the throwaway smoke-test app it
+already was; a real event-collector/event-aggregator process that
+composes them is future work the implementation plan itself scopes out
+(see its "Scope").
 
 ### Logging and errors
 

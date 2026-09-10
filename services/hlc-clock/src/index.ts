@@ -7,18 +7,24 @@
 // process, called synchronously" wrapper around it, now living here
 // instead of in a Gleam actor's mailbox loop.
 //
-// This is the one file (besides the bridges under `src/bridges/`)
-// allowed to import compiled Gleam output directly — everything it
-// returns to the rest of the application is either a plain `string`
-// (`next`/`merge`) or the compiled `HlcParts` record (`nextParts`,
-// consumed only by `src/bridges/streams-bridge.ts`, never by
-// application code — see that file for why `HlcParts` crossing this one
-// narrow boundary doesn't violate "no Gleam ADTs facing TypeScript").
+// Moved here (from `service/src/hlc-clock.ts`) in
+// documentation/plans/architecture/event-store-implementation-plan.md's
+// Phase 2/6: once `services/event-creation`/`services/event-store` also
+// need a real `HlcClock`, it can no longer live only inside `service/`
+// — today's throwaway smoke-test app (see that plan's "Scope"). `service/`
+// now depends on this package instead of holding its own copy.
+//
+// This is the one file (besides the bridges under
+// `service/src/bridges/`) allowed to import compiled Gleam output
+// directly — everything it returns to the rest of the application is
+// either a plain `string` (`next`/`merge`) or the compiled `HlcParts`
+// record (`nextParts`, consumed only by `streams-bridge.ts`'s own
+// Gleam-aware boundary, never by application code).
 //
 // @ts-expect-error — no .d.ts for compiled Gleam output.
-import { new$ as clockNew, next as clockNext, next_parts as clockNextParts, merge as clockMerge, threshold_for_time as clockThresholdForTime, InvalidLength, InvalidFormat } from "../../domain/shared/build/dev/javascript/shared/hlc/clock.mjs";
+import { new$ as clockNew, next as clockNext, next_parts as clockNextParts, merge as clockMerge, threshold_for_time as clockThresholdForTime, InvalidLength, InvalidFormat } from "../../../domain/shared/build/dev/javascript/shared/hlc/clock.mjs";
 // @ts-expect-error — no .d.ts for compiled Gleam output.
-import { encode as base62Encode, InvalidWidth, InsufficientWidth, NegativeValue } from "../../domain/shared/build/dev/javascript/shared/hlc/base62.mjs";
+import { encode as base62Encode, InvalidWidth, InsufficientWidth, NegativeValue } from "../../../domain/shared/build/dev/javascript/shared/hlc/base62.mjs";
 
 /** Node ids are plain integers everywhere except as an HLC's own
  *  5-character base-62 subfield (see

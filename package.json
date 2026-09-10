@@ -1,6 +1,6 @@
 {
   "private": true,
-  "workspaces": ["service"],
+  "workspaces": ["service", "services/*"],
   "devDependencies": {
     "typescript": "^5",
     "@types/bun": "^1"
@@ -8,6 +8,8 @@
   "scripts": {
     "build:domain": "set -e; for p in domain/*/; do (cd \"$p\" && gleam build); done",
     "test:domain": "set -e; for p in domain/*/; do (cd \"$p\" && gleam test --runtime bun); done",
-    "format:domain:check": "set -e; for p in domain/*/; do (cd \"$p\" && gleam format --check src test); done"
+    "format:domain:check": "set -e; for p in domain/*/; do (cd \"$p\" && gleam format --check src test); done",
+    "build:services": "set -e; for p in services/*/; do (cd \"$p\" && bun run build); done",
+    "test:services": "set -e; for p in services/*/; do (cd \"$p\" && bun run test); done"
   }
 }
