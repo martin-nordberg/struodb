@@ -59,22 +59,4 @@ describe("HlcClock", () => {
     const clock = HlcClock.create(7, () => 1_700_000_000_000);
     expect(() => clock.merge("bad!")).toThrow();
   });
-
-  describe("thresholdForTime", () => {
-    test("is exactly 15 characters", () => {
-      expect(HlcClock.thresholdForTime(1_700_000_000_000).length).toBe(15);
-    });
-
-    test("a real value drawn at the same millisecond sorts >= it", () => {
-      const clock = HlcClock.create(7, () => 1_700_000_000_000);
-      const threshold = HlcClock.thresholdForTime(1_700_000_000_000);
-      expect(clock.next() >= threshold).toBe(true);
-    });
-
-    test("a real value from the previous millisecond sorts < it", () => {
-      const clock = HlcClock.create(7, () => 1_699_999_999_999);
-      const threshold = HlcClock.thresholdForTime(1_700_000_000_000);
-      expect(clock.next() < threshold).toBe(true);
-    });
-  });
 });

@@ -31,6 +31,20 @@
         "hlc-clock": "workspace:*",
       },
     },
+    "services/event-delivery": {
+      "name": "event-delivery",
+      "version": "1.0.0",
+      "dependencies": {
+        "database-repo": "workspace:*",
+      },
+    },
+    "services/event-obsolescence": {
+      "name": "event-obsolescence",
+      "version": "1.0.0",
+      "dependencies": {
+        "database-repo": "workspace:*",
+      },
+    },
     "services/event-store": {
       "name": "event-store",
       "version": "1.0.0",
@@ -63,6 +77,10 @@
     "database-repo": ["database-repo@workspace:services/database-repo"],
 
     "event-creation": ["event-creation@workspace:services/event-creation"],
+
+    "event-delivery": ["event-delivery@workspace:services/event-delivery"],
+
+    "event-obsolescence": ["event-obsolescence@workspace:services/event-obsolescence"],
 
     "event-store": ["event-store@workspace:services/event-store"],
 

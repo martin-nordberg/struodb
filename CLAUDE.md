@@ -136,9 +136,7 @@ inspected — see that package's header comment) and calling straight
 through to `clock.new$`/`next`/`next_parts`/`merge` on each method call,
 the same "one clock per process, called synchronously" role
 `clock_keeper.gleam`'s actor used to play. It also owns the
-integer-node-id boundary (see below) and `thresholdForTime`, a synthetic
-zero-counter/zero-node-id HLC value a retention sweep range-scans
-`_struo_hlc` against directly. `service/src/main.ts` constructs the one
+integer-node-id boundary (see below). `service/src/main.ts` constructs the one
 `HlcClock` a process uses and passes it to whichever bridge needs it
 (today, `streams-bridge.ts`, for `INSERT`'s per-row HLC stamping);
 `services/event-creation`/`services/event-store` are the other real

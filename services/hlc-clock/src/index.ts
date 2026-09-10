@@ -22,7 +22,7 @@
 // Gleam-aware boundary, never by application code).
 //
 // @ts-expect-error — no .d.ts for compiled Gleam output.
-import { new$ as clockNew, next as clockNext, next_parts as clockNextParts, merge as clockMerge, threshold_for_time as clockThresholdForTime, InvalidLength, InvalidFormat } from "../../../domain/shared/build/dev/javascript/shared/hlc/clock.mjs";
+import { new$ as clockNew, next as clockNext, next_parts as clockNextParts, merge as clockMerge, InvalidLength, InvalidFormat } from "../../../domain/shared/build/dev/javascript/shared/hlc/clock.mjs";
 // @ts-expect-error — no .d.ts for compiled Gleam output.
 import { encode as base62Encode, InvalidWidth, InsufficientWidth, NegativeValue } from "../../../domain/shared/build/dev/javascript/shared/hlc/base62.mjs";
 
@@ -121,15 +121,6 @@ export class HlcClock {
       throw new Error(describeHlcError(result[0]));
     }
     return new HlcClock(result[0]);
-  }
-
-  /** A synthetic HLC value for `physicalTimeMs` with counter and node id
-   *  both zeroed — for range-comparing against real `_struo_hlc` values
-   *  (e.g. a retention sweep's `WHERE _struo_hlc < thresholdForTime(t)`).
-   *  Not a real clock reading; needs no instance. See
-   *  `hlc/clock.gleam`'s `threshold_for_time` for the full rationale. */
-  static thresholdForTime(physicalTimeMs: number): string {
-    return clockThresholdForTime(physicalTimeMs) as string;
   }
 
   /** The next HLC value for a local event on this node, as its full

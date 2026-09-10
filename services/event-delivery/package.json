@@ -1,0 +1,16 @@
+{
+  "name": "event-delivery",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "database-repo": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "bun test"
+  }
+}
