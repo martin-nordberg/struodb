@@ -10,23 +10,32 @@ from collectors or other aggregators.
 
 ## 2.2 Supporting Changes in Existing Specs and Code
 
+* Note that the existing ./service code is just temporary for testing TypeScript
+  calls to Gleam code and will soon be obsolete.
 * In ddl_spec.md and associated code, whenever a table is created for a stream,
-  an additional table is created to track pending aggregations. CREATE STREAM
-  transpilation needs expansion to something like:
+  two additional tables are created to track migration history and pending 
+  aggregations. CREATE STREAM transpilation needs expansion to something like:
   ```
   -- Existing
   CREATE TABLE <stream name> ...
   
   -- New
-  CREATE TABLE _struo_<stream_name>_pending_aggregations (
-  event_hlc CHAR(15) NOT NULL FOREIGN KEY <stream name>._struo_hlc,
-  aggregator_node_id INTEGER NOT NULL FOREIGN KEY <stream name>._struo_hlc_node_id,
-  PRIMARY KEY (event_hlc, aggregator_node_id)
+  CREATE TABLE _struo_<stream_name>_migration_history(
+    seq INTEGER NOT NULL PRIMARY KEY, 
+    hash CHAR(64) NOT NULL
   );
-
-  CREATE INDEX _struo_idx_<stream_name>_pending_aggregator_node_ids
-  ON _struo_pending_aggregations.aggregator_node_id;
+    
+  CREATE TABLE _struo_<stream_name>_pending_aggregations (
+    aggregator_node_id INTEGER NOT NULL,
+    event_hlc CHAR(15) NOT NULL REFERENCES <stream name>(_struo_hlc) ON DELETE CASCADE,
+    PRIMARY KEY (aggregator_node_id, event_hlc)
+  );
   ```
+  Notes: 
+    1. _struo_<stream_name>_pending_aggregations will have considerable churn
+       so will need tuning to handle heavy inserts and deletes (no updates).
+    2. The "ON DELETE CASCADE" allows deletion of delayed pending aggregations if
+       an event has been delivered to a quorum (possibly a minority) of other aggregators.
 * In dml_spec.md and associated code, StruoQL INSERT transpilation needs to be
   passed an additional parameter, a list of integer aggregator node IDs.
   The output SQL INSERT needs to be expanded to insert records
@@ -70,15 +79,14 @@ from collectors or other aggregators.
 
 * **Indefinite** - Events are never deleted by the event collector itself.
 * **Removed After Aggregation** - Events are deleted from the event collector 
-  database after they have been delivered to a given number of event aggregators.
+  database after they have been delivered to a quorum of event aggregators
+  (a number greater than zero and less than or equal to the total number of aggregators
+  for the stream).
 * **Time-Limited** - Events are deleted from the event collector database
-  after they have been delivered to a given number of event aggregators
-  *and* a given time interval has elapsed since event creation.
-* **Size-Limited** - Old events are deleted (oldest first) to maintain a maximum
-  number of stored events, regardless of whether they have been 
-  successfully aggregated.
-* **Age-limited** - Events are deleted when they are older than a given time
-  interval, regardless of whether they have been successfully aggregated.
+  after they have been delivered to a quorum of event aggregators
+  (a number greater than zero and less than or equal to the total number of aggregators
+  for the stream) *and* a given time interval has elapsed since event creation 
+  (meaning _struo_created_at, not _struo_hlc_timestamp).
 
 ## 2.4 Event Store Software Components
 
@@ -121,7 +129,8 @@ TODO: Define a JSON format for the above
 ### 2.6.1 Schema Migration Sub-Logic
 
 * The containing application reads the existing stream migration hash codes
-  via the Database Repository.
+  via the Database Repository (_struo_<stream_name>_migration_history ordered
+  by seq).
 * The containing application calls applyMigration to determine the PostgreSQL
   needed to update the schema.
 * The containing application calls Database Repository to
@@ -136,12 +145,12 @@ TODO: Define a JSON format for the above
 * For each stream directly defined by the store (e.g. in a config file):
   - The containing application reads the stream's schema definition 
     (sequence of migrations).
-  - The schema migrations steps of §2.4.1 are completed.
+  - The schema migrations steps of §2.6.1 are completed.
 * For each stream supported by the store:
   - For each aggregator defined for the stream:
     o The store calls Aggregator Registration to register with the linked
       aggregator and to retrieve the aggregator's schema for the stream.
-    o The schema migrations steps of §2.4.1 are completed.
+    o The schema migrations steps of §2.6.1 are completed.
 * The containing application begins accepting event creation commands.
 
 ### 2.6.3 Event Creation
@@ -178,6 +187,7 @@ TODO: Define a JSON format for the above
 
 * Name: schema_migration
 * Path: ./services/schema_migration
+* Type: Shared Library
 * Language: TypeScript 
 * Runtime: Bun
 * Dependencies:
@@ -188,6 +198,7 @@ TODO: Define a JSON format for the above
 
 * Name: event_creation
 * Path: ./services/event_creation
+* Type: Shared Library
 * Language: TypeScript
 * Runtime: Bun
 * Dependencies:
@@ -198,6 +209,7 @@ TODO: Define a JSON format for the above
 
 * Name: database_repo
 * Path: ./services/database_repo
+* Type: Shared Library
 * Language: TypeScript
 * Runtime: Bun
 * Dependencies:
@@ -211,6 +223,7 @@ TODO: Define a JSON format for the above
 
 * Name: aggregator_registration
 * Path: ./services/aggregator_registration
+* Type: Shared Library
 * Language: TypeScript
 * Runtime: Bun
 * Dependencies:
@@ -220,6 +233,7 @@ TODO: Define a JSON format for the above
 
 * Name: event_delivery
 * Path: ./services/event_delivery
+* Type: Shared Library
 * Language: TypeScript
 * Runtime: Bun
 * Dependencies:
@@ -230,8 +244,24 @@ TODO: Define a JSON format for the above
 
 * Name: event_obsolescence
 * Path: ./services/event_obsolescence
+* Type: Shared Library
 * Language: TypeScript
 * Runtime: Bun
 * Dependencies:
   - Database Repository
+
+### 2.7.8 Event Store
+
+* Name: event_store
+* Path: ./services/event_store
+* Type: Shared Library
+* Language: TypeScript
+* Runtime: Bun
+* Dependencies:
+  - schema_migration
+  - event_creation
+  - database_repo (transitive)
+  - aggregator_registration
+  - event_delivery
+  - event_obsolescence
 
