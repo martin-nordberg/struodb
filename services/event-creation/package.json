@@ -1,0 +1,19 @@
+{
+  "name": "event-creation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "database-repo": "workspace:*",
+    "hlc-clock": "workspace:*"
+  },
+  "scripts": {
+    "prebuild": "bun run --cwd ../.. build:domain",
+    "build": "bun run prebuild && tsc --noEmit",
+    "pretest": "bun run prebuild",
+    "test": "bun test"
+  }
+}
