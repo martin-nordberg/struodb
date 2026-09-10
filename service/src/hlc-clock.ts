@@ -16,7 +16,40 @@
 // narrow boundary doesn't violate "no Gleam ADTs facing TypeScript").
 //
 // @ts-expect-error — no .d.ts for compiled Gleam output.
-import { new$ as clockNew, next as clockNext, next_parts as clockNextParts, merge as clockMerge, InvalidLength, InvalidFormat } from "../../domain/shared/build/dev/javascript/shared/hlc/clock.mjs";
+import { new$ as clockNew, next as clockNext, next_parts as clockNextParts, merge as clockMerge, threshold_for_time as clockThresholdForTime, InvalidLength, InvalidFormat } from "../../domain/shared/build/dev/javascript/shared/hlc/clock.mjs";
+// @ts-expect-error — no .d.ts for compiled Gleam output.
+import { encode as base62Encode, InvalidWidth, InsufficientWidth, NegativeValue } from "../../domain/shared/build/dev/javascript/shared/hlc/base62.mjs";
+
+/** Node ids are plain integers everywhere except as an HLC's own
+ *  5-character base-62 subfield (see
+ *  documentation/plans/architecture/event-store-implementation-plan.md,
+ *  Phase 2) — this is the upper bound that field imposes: `62^5 - 1`,
+ *  the largest value `base62.encode(nodeId, 5)` below can represent.
+ *  `hlc/clock.gleam`'s own `start`/`new` is unaffected by any of this —
+ *  it still takes the pre-encoded 5-character string, since that
+ *  parameter already *is* the literal subfield value every HLC this
+ *  clock produces will embed (hlc-spec.md §2.6); `HlcClock.create`
+ *  below is the one place a plain integer becomes that string. */
+export const MAX_NODE_ID = 916_132_831; // 62^5 - 1, node_id_width = 5
+
+function describeBase62Error(error: unknown): string {
+  if (error instanceof NegativeValue) {
+    const e = error as { value: number };
+    return `node id must not be negative: got ${e.value}`;
+  }
+  if (error instanceof InsufficientWidth) {
+    const e = error as { needed: number; provided: number };
+    return `node id too large for a ${e.provided}-character base-62 field (needs ${e.needed}); max is ${MAX_NODE_ID}`;
+  }
+  if (error instanceof InvalidWidth) {
+    // Unreachable in practice — this module always calls encode with the
+    // literal width 5 — but handled for completeness alongside the two
+    // variants above.
+    const e = error as { width: number };
+    return `invalid base-62 field width: ${e.width}`;
+  }
+  return `invalid node id: ${String(error)}`;
+}
 
 /** The 4 encoded HLC fields, as `hlc/clock.gleam`'s `HlcParts` — kept as
  *  the compiled Gleam record rather than flattened, since the only
@@ -58,8 +91,9 @@ function describeHlcError(error: unknown): string {
   return `invalid HLC value: ${String(error)}`;
 }
 
-/** Node id must be exactly 5 base-62 (`0-9A-Za-z`) characters — see
- *  `documentation/docs/specifications/internals/hlc-spec.md`. */
+/** Node id is a plain integer, `0 <= nodeId <= MAX_NODE_ID` — see
+ *  `documentation/docs/specifications/internals/hlc-spec.md` for the
+ *  5-character base-62 field it gets encoded into. */
 export class HlcClock {
   #state: ClockState;
 
@@ -69,13 +103,27 @@ export class HlcClock {
 
   /** `now` defaults to `Date.now`, overridable so tests can supply a
    *  fixed or stepped clock (the same role `hlc/clock.gleam`'s own
-   *  injected `now: fn() -> Int` parameter plays on the Gleam side). */
-  static create(nodeId: string, now: () => number = Date.now): HlcClock {
-    const result = clockNew(nodeId, now) as Result<ClockState, unknown>;
+   *  injected `now: fn() -> Int` parameter plays on the Gleam side).
+   *  Throws if `nodeId` is negative or exceeds `MAX_NODE_ID`. */
+  static create(nodeId: number, now: () => number = Date.now): HlcClock {
+    const encoded = base62Encode(nodeId, 5) as Result<string, unknown>;
+    if (!encoded.isOk()) {
+      throw new Error(describeBase62Error(encoded[0]));
+    }
+    const result = clockNew(encoded[0], now) as Result<ClockState, unknown>;
     if (!result.isOk()) {
       throw new Error(describeHlcError(result[0]));
     }
     return new HlcClock(result[0]);
+  }
+
+  /** A synthetic HLC value for `physicalTimeMs` with counter and node id
+   *  both zeroed — for range-comparing against real `_struo_hlc` values
+   *  (e.g. a retention sweep's `WHERE _struo_hlc < thresholdForTime(t)`).
+   *  Not a real clock reading; needs no instance. See
+   *  `hlc/clock.gleam`'s `threshold_for_time` for the full rationale. */
+  static thresholdForTime(physicalTimeMs: number): string {
+    return clockThresholdForTime(physicalTimeMs) as string;
   }
 
   /** The next HLC value for a local event on this node, as its full

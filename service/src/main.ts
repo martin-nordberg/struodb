@@ -20,13 +20,13 @@ import { HlcClock } from "./hlc-clock.ts";
 
 const QUIT_SENTINELS = new Set(["~quit", "~q"]);
 
-/** Must be exactly 5 base-62 (`0-9A-Za-z`) characters — see
- *  documentation/docs/specifications/internals/hlc-spec.md. Read from
- *  `STRUODB_NODE_ID`, falling back to a single-node development default;
- *  a real multi-node deployment's config source is not this migration's
- *  concern (see the plan's "Explicitly deferred" section). */
-function nodeId(): string {
-  return Bun.env.STRUODB_NODE_ID ?? "node1";
+/** A plain integer, `0 <= nodeId <= HlcClock.MAX_NODE_ID` — see
+ *  `hlc-clock.ts`. Read from `STRUODB_NODE_ID`, falling back to a
+ *  single-node development default; a real multi-node deployment's
+ *  config source is not this migration's concern (see the plan's
+ *  "Explicitly deferred" section). */
+function nodeId(): number {
+  return Number(Bun.env.STRUODB_NODE_ID ?? "1");
 }
 
 function looksLikeDdl(statement: string): boolean {
@@ -49,7 +49,11 @@ export async function main(): Promise<void> {
       catalog = updatedCatalog;
       console.log(resultJson);
     } else {
-      console.log(applyInsert(clock, catalog, statement));
+      // No aggregators configured for this ad hoc smoke-test app — see
+      // documentation/plans/architecture/event-store-implementation-plan.md's
+      // "Scope" (this app is throwaway; a real caller is
+      // services/event-creation, built from Event Store Configuration).
+      console.log(applyInsert(clock, catalog, statement, () => []));
     }
   }
 }

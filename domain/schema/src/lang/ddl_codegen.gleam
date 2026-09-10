@@ -121,7 +121,28 @@ fn statement_to_sql(stmt: ast.DdlStatement) -> String {
 // CREATE STREAM -> CREATE TABLE
 //-----------------------------------------------------------------------------
 
+/// Renders `stmt`'s own `CREATE TABLE` plus the two event-store
+/// bookkeeping tables every stream gets alongside it (see
+/// `documentation/plans/architecture/event-store-implementation-plan.md`,
+/// Phase 3, and `catalog.migration_history_table_name`/
+/// `pending_aggregations_table_name`'s own doc comments for each
+/// table's schema) — 3 statements, joined the same way `render_all`
+/// joins multiple top-level statements. Neither bookkeeping table is
+/// part of a stream's *declared shape*: `ddl_semantics.gleam`/
+/// `catalog.gleam` never track columns/constraints for them, only the
+/// name each is rendered under.
 pub fn create_stream_to_sql(stmt: ast.DdlStatement) -> String {
+  let assert ast.CreateStream(name:, ..) = stmt
+
+  [
+    main_table_sql(stmt),
+    migration_history_table_sql(name),
+    pending_aggregations_table_sql(name),
+  ]
+  |> string.join("\n\n")
+}
+
+fn main_table_sql(stmt: ast.DdlStatement) -> String {
   let assert ast.CreateStream(name:, elements:, span: _) = stmt
 
   let columns = column_defs(elements)
@@ -145,6 +166,29 @@ pub fn create_stream_to_sql(stmt: ast.DdlStatement) -> String {
     |> string.join(",\n")
   }
   <> "\n);"
+}
+
+fn migration_history_table_sql(stream: String) -> String {
+  "CREATE TABLE "
+  <> expr_codegen.quote_identifier(catalog.migration_history_table_name(stream))
+  <> " (\n  seq INTEGER NOT NULL PRIMARY KEY,\n  hash CHAR(64) NOT NULL\n);"
+}
+
+fn pending_aggregations_table_sql(stream: String) -> String {
+  "CREATE TABLE "
+  <> expr_codegen.quote_identifier(catalog.pending_aggregations_table_name(
+    stream,
+  ))
+  <> " (\n"
+  <> "  aggregator_node_id INTEGER NOT NULL,\n"
+  <> "  event_hlc "
+  <> expr_codegen.data_type_to_sql(xast.DtChar(Some(15)))
+  <> " NOT NULL REFERENCES "
+  <> expr_codegen.quote_identifier(stream)
+  <> "("
+  <> expr_codegen.quote_identifier(catalog.hlc_column_name)
+  <> ") ON DELETE CASCADE,\n"
+  <> "  PRIMARY KEY (aggregator_node_id, event_hlc)\n);"
 }
 
 /// The 5 automatic system columns (catalog.gleam's `system_columns()`),

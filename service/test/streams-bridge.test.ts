@@ -11,24 +11,45 @@ import { HlcClock } from "../src/hlc-clock.ts";
 
 describe("streams-bridge", () => {
   test("applyInsert on a valid INSERT returns ok JSON", () => {
-    const clock = HlcClock.create("aaaaa", () => 1_700_000_000_000);
+    const clock = HlcClock.create(7, () => 1_700_000_000_000);
     const [, catalog] = applyDdl(emptyCatalog(), "CREATE STREAM s (a INT);");
 
-    const resultJson = applyInsert(clock, catalog, "INSERT INTO s (a) VALUES (1);");
+    const resultJson = applyInsert(
+      clock,
+      catalog,
+      "INSERT INTO s (a) VALUES (1);",
+      () => [],
+    );
     const result = JSON.parse(resultJson);
     expect(result.ok).toBe(true);
     expect(String(result.sql)).toContain("INSERT INTO s");
   });
 
   test("applyInsert against an unknown stream returns error JSON", () => {
-    const clock = HlcClock.create("aaaaa", () => 1_700_000_000_000);
+    const clock = HlcClock.create(7, () => 1_700_000_000_000);
     const resultJson = applyInsert(
       clock,
       emptyCatalog(),
       "INSERT INTO nonexistent (a) VALUES (1);",
+      () => [],
     );
     const result = JSON.parse(resultJson);
     expect(result.ok).toBe(false);
     expect(typeof result.error).toBe("string");
+  });
+
+  test("applyInsert with an aggregator fans out into pending_aggregations", () => {
+    const clock = HlcClock.create(7, () => 1_700_000_000_000);
+    const [, catalog] = applyDdl(emptyCatalog(), "CREATE STREAM s (a INT);");
+
+    const resultJson = applyInsert(
+      clock,
+      catalog,
+      "INSERT INTO s (a) VALUES (1);",
+      () => [11],
+    );
+    const result = JSON.parse(resultJson);
+    expect(result.ok).toBe(true);
+    expect(String(result.sql)).toContain("_struo_s_pending_aggregations");
   });
 });

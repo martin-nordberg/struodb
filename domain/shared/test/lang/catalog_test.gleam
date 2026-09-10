@@ -276,4 +276,31 @@ pub fn alter_actions_leave_migration_hashes_untouched_test() {
 
   assert schema.migration_hashes == ["hash-0"]
 }
+
+//-----------------------------------------------------------------------------
+// Event store bookkeeping table names
+//-----------------------------------------------------------------------------
+
+pub fn migration_history_table_name_test() {
+  assert catalog.migration_history_table_name("sensor_reading")
+    == "_struo_sensor_reading_migration_history"
+}
+
+pub fn pending_aggregations_table_name_test() {
+  assert catalog.pending_aggregations_table_name("sensor_reading")
+    == "_struo_sensor_reading_pending_aggregations"
+}
+
+/// Both names are computed on the *unquoted* stream name — quoting (if
+/// any) is a codegen-time concern applied afterward by whichever module
+/// renders the name into SQL, not something these pure string functions
+/// need to know about. A stream name that itself needs quoting (mixed
+/// case) still produces a correctly-suffixed derived name here; only its
+/// eventual SQL rendering differs.
+pub fn table_names_use_the_stream_name_verbatim_test() {
+  assert catalog.migration_history_table_name("MixedCase")
+    == "_struo_MixedCase_migration_history"
+  assert catalog.pending_aggregations_table_name("MixedCase")
+    == "_struo_MixedCase_pending_aggregations"
+}
 //-----------------------------------------------------------------------------

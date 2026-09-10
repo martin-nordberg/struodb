@@ -1,5 +1,6 @@
 import gleam/dict
 import gleam/option.{None, Some}
+import gleam/string
 import lang/catalog
 import lang/ddl_ast as ast
 import lang/ddl_codegen
@@ -104,11 +105,56 @@ const create_stream_expected = "CREATE TABLE sensor_reading (
   sensor_id VARCHAR(24) NOT NULL,
   notes VARCHAR(200),
   CONSTRAINT reading_in_range CHECK (reading > 0 AND reading <= 100)
+);
+
+CREATE TABLE _struo_sensor_reading_migration_history (
+  seq INTEGER NOT NULL PRIMARY KEY,
+  hash CHAR(64) NOT NULL
+);
+
+CREATE TABLE _struo_sensor_reading_pending_aggregations (
+  aggregator_node_id INTEGER NOT NULL,
+  event_hlc CHAR(15) NOT NULL REFERENCES sensor_reading(_struo_hlc) ON DELETE CASCADE,
+  PRIMARY KEY (aggregator_node_id, event_hlc)
 );"
 
+/// The main table's own shape still matches ddl-spec.md §9.7's worked
+/// example exactly (that spec knows nothing about the event store); the
+/// two tables after it are the event-store bookkeeping tables
+/// `create_stream_to_sql` now emits alongside it — see
+/// documentation/docs/specifications/architecture/event-stores.md §2.2
+/// and `catalog.migration_history_table_name`/
+/// `pending_aggregations_table_name`'s own doc comments.
 pub fn create_stream_matches_the_spec_worked_example_test() {
   assert ddl_codegen.create_stream_to_sql(create_stream_example())
     == create_stream_expected
+}
+
+/// A stream name needing quoting (mixed case) produces correctly-quoted
+/// derived bookkeeping table names too, in all 3 rendered statements —
+/// the suffix concatenation itself happens on the unquoted name
+/// (`catalog.migration_history_table_name`/
+/// `pending_aggregations_table_name`), so quoting has to be reapplied to
+/// the whole derived name afterward, not inherited from the stream
+/// name's own quoting.
+pub fn bookkeeping_table_names_are_quoted_when_the_stream_name_needs_it_test() {
+  let stmt =
+    ast.CreateStream(name: "MixedCase", elements: [], span: dummy_span())
+  let sql = ddl_codegen.create_stream_to_sql(stmt)
+
+  assert string.contains(sql, "CREATE TABLE \"MixedCase\" (")
+  assert string.contains(
+    sql,
+    "CREATE TABLE \"_struo_MixedCase_migration_history\" (",
+  )
+  assert string.contains(
+    sql,
+    "CREATE TABLE \"_struo_MixedCase_pending_aggregations\" (",
+  )
+  assert string.contains(
+    sql,
+    "REFERENCES \"MixedCase\"(_struo_hlc) ON DELETE CASCADE,",
+  )
 }
 
 //-----------------------------------------------------------------------------
@@ -222,6 +268,15 @@ pub fn a_semicolon_inside_a_string_literal_is_not_a_statement_boundary_test() {
     <> "  _struo_created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),\n"
     <> "  a INTEGER NOT NULL,\n"
     <> "  CONSTRAINT c CHECK (a != 'x;y')\n"
+    <> ");\n\n"
+    <> "CREATE TABLE _struo_s_migration_history (\n"
+    <> "  seq INTEGER NOT NULL PRIMARY KEY,\n"
+    <> "  hash CHAR(64) NOT NULL\n"
+    <> ");\n\n"
+    <> "CREATE TABLE _struo_s_pending_aggregations (\n"
+    <> "  aggregator_node_id INTEGER NOT NULL,\n"
+    <> "  event_hlc CHAR(15) NOT NULL REFERENCES s(_struo_hlc) ON DELETE CASCADE,\n"
+    <> "  PRIMARY KEY (aggregator_node_id, event_hlc)\n"
     <> ");\n\n"
     <> "ALTER TABLE s\n"
     <> "  ADD COLUMN b INTEGER;\n"

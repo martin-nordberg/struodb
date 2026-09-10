@@ -316,4 +316,36 @@ fn update_schema(
   let assert Ok(schema) = dict.get(catalog.streams, stream)
   Catalog(streams: dict.insert(catalog.streams, stream, f(schema)))
 }
+
 //-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// Event store bookkeeping table names (see
+// documentation/plans/architecture/event-store-implementation-plan.md,
+// Phase 1). Both are a deterministic function of the stream name alone —
+// no `Catalog` needed — and live here, not in `schema/ddl_codegen.gleam`
+// (which creates them) or `streams/dml_codegen.gleam` (which inserts
+// into one of them), so the two packages can never drift apart on the
+// name. Neither table is part of a stream's *declared shape*: they carry
+// no entry in `StreamSchema.columns`/`constraints`, only a name.
+//-----------------------------------------------------------------------------
+
+/// The append-only record of applied `CREATE`/`ALTER STREAM` statement
+/// hashes for `stream` (see `StreamSchema.migration_hashes` above) —
+/// where that list is meant to be persisted between process restarts.
+/// Schema: `seq INTEGER NOT NULL PRIMARY KEY, hash CHAR(64) NOT NULL`,
+/// read back `ORDER BY seq`.
+pub fn migration_history_table_name(stream: String) -> String {
+  "_struo_" <> stream <> "_migration_history"
+}
+
+/// One row per (event, aggregator) combination not yet delivered.
+/// Schema: `aggregator_node_id INTEGER NOT NULL, event_hlc CHAR(15) NOT
+/// NULL REFERENCES <stream>(_struo_hlc) ON DELETE CASCADE, PRIMARY KEY
+/// (aggregator_node_id, event_hlc)` — that column order (not `event_hlc`
+/// first) is deliberate: the usual access pattern is "pending rows for
+/// aggregator X, oldest first," and the primary key's own index already
+/// serves that directly.
+pub fn pending_aggregations_table_name(stream: String) -> String {
+  "_struo_" <> stream <> "_pending_aggregations"
+}

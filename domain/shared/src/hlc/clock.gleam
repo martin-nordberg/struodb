@@ -125,6 +125,25 @@ pub fn merge(
   }
 }
 
+/// A synthetic HLC value for `physical_time_ms` with counter and node id
+/// both zeroed — not a real clock reading, never returned by `next`/
+/// `next_parts`/`merge`, and takes no `ClockState` (pure function of the
+/// timestamp alone). Exists purely so a caller can range-compare it
+/// against real encoded HLC values: every real HLC recorded at or after
+/// `physical_time_ms` sorts `>=` this value (a real counter/node-id
+/// field is never "more zero" than `"00"`/`"00000"`), and every one
+/// strictly before it sorts `<`. This lets a retention sweep express
+/// "delete events older than T" as `WHERE _struo_hlc <
+/// threshold_for_time(t)` directly against the primary key, with no
+/// decode step and no secondary index on the decoded timestamp column.
+pub fn threshold_for_time(physical_time_ms: Int) -> String {
+  // Safe for the same reason encode_value's own `let assert` is: the
+  // time field has ~6,900 years of headroom (see docs/hlc/spec.md), so
+  // any real millisecond timestamp fits.
+  let assert Ok(time_part) = base62.encode(physical_time_ms, time_width)
+  time_part <> string.repeat("0", counter_width + node_id_width)
+}
+
 //-----------------------------------------------------------------------------
 
 /// Applies the rollover rule: if `counter` overflows the field's capacity,

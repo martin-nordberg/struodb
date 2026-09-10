@@ -29,12 +29,20 @@ import lang/dml_codegen
 /// `INSERT` never changes a stream's shape (see `dml_codegen.generate`),
 /// so unlike `schema/ddl_facade.apply_ddl` this returns only the result —
 /// there is no updated `Catalog` to hand back.
+///
+/// `aggregators_for_stream: fn(String) -> List(Int)` is the other
+/// function type in this module's public signature, alongside
+/// `next_hlc` — same "only the bridge ever constructs this closure"
+/// rule, built from Event Store Configuration on the TypeScript side
+/// (see
+/// documentation/plans/architecture/event-store-implementation-plan.md).
 pub fn apply_insert(
   catalog: Catalog,
   source: String,
   next_hlc: fn() -> HlcParts,
+  aggregators_for_stream: fn(String) -> List(Int),
 ) -> String {
-  case dml_codegen.generate(catalog, source, next_hlc) {
+  case dml_codegen.generate(catalog, source, next_hlc, aggregators_for_stream) {
     Ok(#(sql, _catalog_unchanged)) -> ok_json(sql)
     Error(err) -> error_json(err)
   }

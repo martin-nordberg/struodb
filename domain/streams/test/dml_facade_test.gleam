@@ -37,12 +37,17 @@ fn a_next_hlc() -> fn() -> clock.HlcParts {
   }
 }
 
+fn no_aggregators() -> fn(String) -> List(Int) {
+  fn(_stream) { [] }
+}
+
 pub fn apply_insert_on_a_valid_statement_returns_ok_json_test() {
   let result =
     dml_facade.apply_insert(
       catalog_with_a_stream_named_s(),
       "INSERT INTO s (a) VALUES (1);",
       a_next_hlc(),
+      no_aggregators(),
     )
 
   let assert True = string.contains(result, "\"ok\":true")
@@ -55,8 +60,22 @@ pub fn apply_insert_against_an_unknown_stream_returns_error_json_test() {
       catalog.empty(),
       "INSERT INTO nonexistent (a) VALUES (1);",
       a_next_hlc(),
+      no_aggregators(),
     )
 
   let assert True = string.contains(result, "\"ok\":false")
   let assert True = string.contains(result, "\"error\":")
+}
+
+pub fn apply_insert_with_an_aggregator_fans_out_into_pending_aggregations_test() {
+  let result =
+    dml_facade.apply_insert(
+      catalog_with_a_stream_named_s(),
+      "INSERT INTO s (a) VALUES (1);",
+      a_next_hlc(),
+      fn(_stream) { [7] },
+    )
+
+  let assert True = string.contains(result, "\"ok\":true")
+  let assert True = string.contains(result, "_struo_s_pending_aggregations")
 }
