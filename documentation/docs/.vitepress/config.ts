@@ -23,10 +23,11 @@ export default defineConfig({
           collapsed: true,
           items: [
             {text: '1. Overview', link: '/specifications/architecture/overview'},
-            {text: '2. Event Collectors', link: '/specifications/architecture/event-collectors'},
-            {text: '3. Event Aggregators', link: '/specifications/architecture/event-aggregators'},
-            {text: '4. Event Propagation', link: '/specifications/architecture/event-propagation'},
-            {text: '5. Event Projectors', link: '/specifications/architecture/event-projectors'},
+            {text: '2. Event Stores', link: '/specifications/architecture/event-stores'},
+            {text: '3. Event Collectors', link: '/specifications/architecture/event-collectors'},
+            {text: '4. Event Aggregators', link: '/specifications/architecture/event-aggregators'},
+            {text: '5. Event Propagation', link: '/specifications/architecture/event-propagation'},
+            {text: '6. Event Projectors', link: '/specifications/architecture/event-projectors'},
           ]
         },
         {

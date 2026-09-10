@@ -1,12 +1,12 @@
-# 4. StruoDB Architecture — Event Propagation
+# 5. StruoDB Architecture — Event Propagation
 
-## 4.1 Event Collection
+## 5.1 Event Collection
 
-## 4.2 Event Aggregation from Collectors
+## 5.2 Event Aggregation from Collectors
 
-## 4.3. Event Aggregator Synchronization
+## 5.3. Event Aggregator Synchronization
 
-## 4.4 Event Projection
+## 5.4 Event Projection
 
 
 
