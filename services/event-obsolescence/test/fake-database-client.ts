@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "database-repo";
+import type { DatabaseClient, StatementResult } from "database-repo";
 
 interface StreamRow {
   _struo_hlc: string;
@@ -75,6 +75,10 @@ export class FakeDatabaseClient implements DatabaseClient {
     );
 
     return toDelete.map(() => ({ deleted: 1 })) as unknown as Row[];
+  }
+
+  async execStatement<Row extends Record<string, unknown>>(): Promise<StatementResult<Row>> {
+    throw new Error("FakeDatabaseClient: execStatement not used by this test");
   }
 
   async insertForwardedEvents(): Promise<void> {

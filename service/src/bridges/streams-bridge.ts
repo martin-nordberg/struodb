@@ -24,10 +24,13 @@ import type { CatalogHandle } from "./schema-bridge.ts";
  *  none renders exactly as it always has; one with at least one fans out
  *  into that stream's `_pending_aggregations` table alongside the
  *  ordinary `INSERT` (see `dml_codegen.insert_to_sql`'s own doc
- *  comment). Returns JSON: `{"ok": true, "sql": "..."}` or `{"ok":
- *  false, "error": "..."}`. `INSERT` never changes a stream's shape, so
- *  — unlike `schema-bridge.ts`'s `applyDdl` — there is no updated
- *  catalog to hand back. */
+ *  comment). Returns JSON: `{"ok": true, "statements": [{"sql": "...",
+ *  "stream_name": "...", "has_returning": true|false}, ...]}` — one
+ *  entry per `INSERT` statement in `source`, in order (see
+ *  `dml_facade.apply_insert`'s own doc comment) — or `{"ok": false,
+ *  "error": "..."}`. `INSERT` never changes a stream's shape, so —
+ *  unlike `schema-bridge.ts`'s `applyDdl` — there is no updated catalog
+ *  to hand back. */
 export function applyInsert(
   clock: HlcClock,
   catalog: CatalogHandle,

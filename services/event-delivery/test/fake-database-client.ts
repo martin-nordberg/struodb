@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "database-repo";
+import type { DatabaseClient, StatementResult } from "database-repo";
 
 /** A minimal in-memory fake standing in for a real Postgres — see
  *  documentation/plans/architecture/event-store-implementation-plan.md's
@@ -46,6 +46,10 @@ export class FakeDatabaseClient implements DatabaseClient {
       return [] as Row[];
     }
     throw new Error(`FakeDatabaseClient: unhandled query: ${sql}`);
+  }
+
+  async execStatement<Row extends Record<string, unknown>>(): Promise<StatementResult<Row>> {
+    throw new Error("FakeDatabaseClient: execStatement not used by this test");
   }
 
   async insertForwardedEvents(

@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "database-repo";
+import type { DatabaseClient, StatementResult } from "database-repo";
 
 // Same crude-but-sufficient fake as services/schema-migration/test/
 // fake-database-client.ts (see its own header comment) — duplicated
@@ -52,6 +52,10 @@ export class FakeDatabaseClient implements DatabaseClient {
       return [] as Row[];
     }
     throw new Error(`FakeDatabaseClient: unhandled query: ${sql}`);
+  }
+
+  async execStatement<Row extends Record<string, unknown>>(): Promise<StatementResult<Row>> {
+    throw new Error("FakeDatabaseClient: execStatement not used by this test");
   }
 
   async insertForwardedEvents(): Promise<void> {

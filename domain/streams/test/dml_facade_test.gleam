@@ -51,7 +51,34 @@ pub fn apply_insert_on_a_valid_statement_returns_ok_json_test() {
     )
 
   let assert True = string.contains(result, "\"ok\":true")
-  let assert True = string.contains(result, "INSERT INTO s")
+  let assert True = string.contains(result, "\"statements\":[{")
+  let assert True = string.contains(result, "\"sql\":\"INSERT INTO s")
+  let assert True = string.contains(result, "\"stream_name\":\"s\"")
+  let assert True = string.contains(result, "\"has_returning\":false")
+}
+
+pub fn apply_insert_with_a_returning_clause_reports_has_returning_test() {
+  let result =
+    dml_facade.apply_insert(
+      catalog_with_a_stream_named_s(),
+      "INSERT INTO s (a) VALUES (1) RETURNING a;",
+      a_next_hlc(),
+      no_aggregators(),
+    )
+
+  let assert True = string.contains(result, "\"has_returning\":true")
+}
+
+pub fn apply_insert_with_two_statements_reports_two_results_test() {
+  let result =
+    dml_facade.apply_insert(
+      catalog_with_a_stream_named_s(),
+      "INSERT INTO s (a) VALUES (1); INSERT INTO s (a) VALUES (2);",
+      a_next_hlc(),
+      no_aggregators(),
+    )
+
+  let assert [_, _, _] = string.split(result, "\"stream_name\":\"s\"")
 }
 
 pub fn apply_insert_against_an_unknown_stream_returns_error_json_test() {

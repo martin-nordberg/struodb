@@ -356,7 +356,7 @@ pub fn insert_with_multiple_rows_and_aggregators_fans_out_once_test() {
 /// their own `aggregators_for_stream` lookup and independent fan-out.
 pub fn two_statements_get_independent_aggregator_lookups_test() {
   let source = "INSERT INTO s (a) VALUES (1); INSERT INTO t (a) VALUES (2);"
-  let assert Ok(#(sql, _catalog)) =
+  let assert Ok(#(results, _catalog)) =
     dml_codegen.generate(
       catalog_with_streams_s_and_t(),
       source,
@@ -369,12 +369,14 @@ pub fn two_statements_get_independent_aggregator_lookups_test() {
       },
     )
 
-  assert string.contains(sql, "_struo_s_pending_aggregations")
-  assert !string.contains(sql, "_struo_t_pending_aggregations")
+  let assert [s_result, t_result] = results
+  assert s_result.stream_name == "s"
+  assert string.contains(s_result.sql, "_struo_s_pending_aggregations")
+  assert t_result.stream_name == "t"
   // "t"'s statement, with no aggregators, still renders as a plain
   // INSERT (no WITH wrapper).
-  let assert [_, plain_t_insert] = string.split(sql, "\n\n")
-  assert string.starts_with(plain_t_insert, "INSERT INTO t")
+  assert !string.contains(t_result.sql, "_struo_t_pending_aggregations")
+  assert string.starts_with(t_result.sql, "INSERT INTO t")
 }
 
 fn catalog_with_streams_s_and_t() -> catalog.Catalog {
@@ -417,14 +419,17 @@ fn catalog_with_sensor_reading() -> catalog.Catalog {
 pub fn generate_end_to_end_against_the_given_catalog_test() {
   let clock = test_clock()
   let #(_, parts) = next_parts(fresh_state())
-  let assert Ok(#(sql, catalog_after)) =
+  let assert Ok(#(results, catalog_after)) =
     dml_codegen.generate(
       catalog_with_sensor_reading(),
       insert_source,
       next_hlc(clock),
       no_aggregators(),
     )
-  assert sql == insert_expected_sql(parts) <> "\n"
+  let assert [result] = results
+  assert result.sql == insert_expected_sql(parts)
+  assert result.stream_name == "sensor_reading"
+  assert result.has_returning == True
   // INSERT never changes a stream's shape.
   assert catalog_after == catalog_with_sensor_reading()
 }
@@ -455,20 +460,22 @@ pub fn a_semicolon_inside_a_string_literal_is_not_a_statement_boundary_test() {
   let clock = test_clock()
   let #(state1, parts1) = next_parts(fresh_state())
   let #(_, parts2) = next_parts(state1)
-  let assert Ok(#(sql, _catalog)) =
+  let assert Ok(#(results, _catalog)) =
     dml_codegen.generate(
       catalog_with_a_stream_named_s(),
       source,
       next_hlc(clock),
       no_aggregators(),
     )
-  assert sql
+  let assert [result1, result2] = results
+  assert result1.sql
     == "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a)\nVALUES\n  ("
     <> system_values_sql(parts1)
-    <> ", 'x;y');\n\n"
-    <> "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a)\nVALUES\n  ("
+    <> ", 'x;y');"
+  assert result2.sql
+    == "INSERT INTO s (_struo_hlc, _struo_hlc_timestamp, _struo_hlc_count, _struo_hlc_node_id, a)\nVALUES\n  ("
     <> system_values_sql(parts2)
-    <> ", 'z');\n"
+    <> ", 'z');"
 }
 
 pub fn empty_input_is_a_parse_failure_not_ok_empty_test() {

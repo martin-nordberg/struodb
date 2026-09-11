@@ -22,7 +22,10 @@ describe("streams-bridge", () => {
     );
     const result = JSON.parse(resultJson);
     expect(result.ok).toBe(true);
-    expect(String(result.sql)).toContain("INSERT INTO s");
+    expect(result.statements.length).toBe(1);
+    expect(result.statements[0].sql).toContain("INSERT INTO s");
+    expect(result.statements[0].stream_name).toBe("s");
+    expect(result.statements[0].has_returning).toBe(false);
   });
 
   test("applyInsert against an unknown stream returns error JSON", () => {
@@ -50,6 +53,6 @@ describe("streams-bridge", () => {
     );
     const result = JSON.parse(resultJson);
     expect(result.ok).toBe(true);
-    expect(String(result.sql)).toContain("_struo_s_pending_aggregations");
+    expect(result.statements[0].sql).toContain("_struo_s_pending_aggregations");
   });
 });

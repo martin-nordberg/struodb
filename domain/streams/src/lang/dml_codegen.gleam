@@ -3,7 +3,6 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import gleam/string_tree
 import hlc/clock
 import lang/catalog.{type Catalog}
 import lang/dml_ast as ast
@@ -30,6 +29,17 @@ pub type CodegenError {
     statement_index: Int,
     errors: List(dml_semantics.SemanticError),
   )
+}
+
+/// One rendered `INSERT` statement's SQL, alongside the two pieces of
+/// metadata a caller needs to execute it on its own and interpret the
+/// result correctly — see
+/// documentation/plans/architecture/event-collector-implementation-plan.md's
+/// "Decisions carried over from discussion" for why `has_returning` is
+/// here but an aggregator count deliberately is not (the caller already
+/// has `aggregators_for_stream` in hand to look that up itself).
+pub type InsertStatementResult {
+  InsertStatementResult(sql: String, stream_name: String, has_returning: Bool)
 }
 
 /// Validates every statement in `source` against `catalog` (threaded
@@ -75,7 +85,7 @@ pub fn generate(
   source: String,
   next_hlc: fn() -> clock.HlcParts,
   aggregators_for_stream: fn(String) -> List(Int),
-) -> Result(#(String, Catalog), CodegenError) {
+) -> Result(#(List(InsertStatementResult), Catalog), CodegenError) {
   use tokens <- result.try(
     lexer.tokenize(source) |> result.map_error(LexFailure),
   )
@@ -92,18 +102,26 @@ pub fn generate(
 /// whose `INSERT`s target streams whose shape doesn't matter for this
 /// call's own purposes — most callers will want `generate` with a real
 /// `Catalog` (e.g. one `schema/ddl_codegen.generate` already produced).
+///
+/// Re-joins `generate`'s per-statement results into one SQL blob, the
+/// same way this module's own rendering always has (`"\n\n"`-joined,
+/// one trailing `"\n"`) — kept so every caller that only ever wanted
+/// the combined SQL text (this module's own test suite included) needs
+/// no change now that `generate` itself reports one result per
+/// statement instead.
 pub fn generate_standalone(
   source: String,
   next_hlc: fn() -> clock.HlcParts,
   aggregators_for_stream: fn(String) -> List(Int),
 ) -> Result(String, CodegenError) {
-  use #(sql, _catalog) <- result.try(generate(
+  use #(results, _catalog) <- result.try(generate(
     catalog.empty(),
     source,
     next_hlc,
     aggregators_for_stream,
   ))
-  Ok(sql)
+  let joined = results |> list.map(fn(r) { r.sql }) |> string.join("\n\n")
+  Ok(joined <> "\n")
 }
 
 fn validate_all(
@@ -125,15 +143,15 @@ fn render_all(
   statements: List(ast.DmlStatement),
   next_hlc: fn() -> clock.HlcParts,
   aggregators_for_stream: fn(String) -> List(Int),
-) -> String {
-  statements
-  |> list.map(fn(stmt) {
-    insert_to_sql(stmt, next_hlc, aggregators_for_stream)
-    |> string_tree.from_string
+) -> List(InsertStatementResult) {
+  list.map(statements, fn(stmt) {
+    let ast.Insert(stream_name:, returning:, ..) = stmt
+    InsertStatementResult(
+      sql: insert_to_sql(stmt, next_hlc, aggregators_for_stream),
+      stream_name: stream_name,
+      has_returning: option.is_some(returning),
+    )
   })
-  |> string_tree.join("\n\n")
-  |> string_tree.append("\n")
-  |> string_tree.to_string
 }
 
 //-----------------------------------------------------------------------------

@@ -23,7 +23,15 @@ import lang/dml_codegen
 /// `catalog`, drawing one fresh HLC value per row (via `next_hlc`) —
 /// see `dml_codegen.generate`'s own doc comment for exactly how. Returns
 /// JSON:
-///   `{"ok": true, "sql": "<generated INSERT text>"}`
+///   `{"ok": true, "statements": [{"sql": "<generated INSERT text>",
+///     "stream_name": "<target stream>", "has_returning": true|false},
+///     ...]}` — one entry per `INSERT` statement in `source`, in order.
+///     See
+///     documentation/plans/architecture/event-collector-implementation-plan.md,
+///     Phase 1, for why a caller needs `stream_name`/`has_returning` per
+///     statement (to execute and interpret each one on its own) but not
+///     an aggregator count (the caller already has
+///     `aggregators_for_stream` to look that up itself).
 ///   `{"ok": false, "error": "<lex/parse/semantic failure description>"}`
 ///
 /// `INSERT` never changes a stream's shape (see `dml_codegen.generate`),
@@ -43,16 +51,27 @@ pub fn apply_insert(
   aggregators_for_stream: fn(String) -> List(Int),
 ) -> String {
   case dml_codegen.generate(catalog, source, next_hlc, aggregators_for_stream) {
-    Ok(#(sql, _catalog_unchanged)) -> ok_json(sql)
+    Ok(#(results, _catalog_unchanged)) -> ok_json(results)
     Error(err) -> error_json(err)
   }
 }
 
 //-----------------------------------------------------------------------------
 
-fn ok_json(sql: String) -> String {
-  json.object([#("ok", json.bool(True)), #("sql", json.string(sql))])
+fn ok_json(results: List(dml_codegen.InsertStatementResult)) -> String {
+  json.object([
+    #("ok", json.bool(True)),
+    #("statements", json.array(results, statement_result_json)),
+  ])
   |> json.to_string
+}
+
+fn statement_result_json(r: dml_codegen.InsertStatementResult) -> json.Json {
+  json.object([
+    #("sql", json.string(r.sql)),
+    #("stream_name", json.string(r.stream_name)),
+    #("has_returning", json.bool(r.has_returning)),
+  ])
 }
 
 /// Renders any `dml_codegen.CodegenError` via `string.inspect` — see
