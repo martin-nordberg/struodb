@@ -9,8 +9,18 @@ import {
   registerWithAggregator,
   type AggregatorEndpoint,
 } from "aggregator-registration";
-import { connect, type DatabaseClient } from "database-repo";
-import { createEvents, type CatalogHandle } from "event-creation";
+import {
+  connect,
+  migrationStepCount,
+  pendingCountsByAggregator,
+  streamEventCount,
+  type DatabaseClient,
+} from "database-repo";
+import {
+  createEvents,
+  type CatalogHandle,
+  type InsertStatementResult,
+} from "event-creation";
 import { deliverPending } from "event-delivery";
 import { sweepStream, type RetentionStrategy } from "event-obsolescence";
 import { HlcClock } from "hlc-clock";
@@ -26,6 +36,7 @@ import {
 } from "./config.ts";
 
 export { parseConfig, ConfigError } from "./config.ts";
+export type { InsertStatementResult } from "event-creation";
 export type {
   EventStoreConfig,
   StreamConfig,
@@ -34,6 +45,16 @@ export type {
   RetentionStrategy,
   AggregatorConfig,
 } from "./config.ts";
+
+/** Backs event-collectors.md §3.3.1's admin endpoint — see
+ *  `EventStore.streamStats`'s own doc comment. */
+export interface StreamStats {
+  name: string;
+  migrationStepCount: number;
+  eventCount: number;
+  aggregatorNodeIds: number[];
+  pendingByAggregator: Record<number, number>;
+}
 
 export class SchemaMismatchError extends Error {
   constructor(stream: string, aggregatorNodeId: number) {
@@ -117,12 +138,55 @@ export class EventStore {
   }
 
   /** Implements event-stores.md §2.6.3: the one method application code
-   *  calls per incoming `INSERT` — what a future `event-collectors.md`
-   *  HTTP ingress (out of scope here, see the implementation plan's
-   *  "Scope") would call per request. */
-  async createEvents(source: string): Promise<void> {
-    await createEvents(this.#db, this.#clock, this.#catalog, source, (stream) =>
+   *  calls per incoming `INSERT` — what
+   *  `services/http-event-creation`'s HTTP ingress calls per request.
+   *  Returns one result per statement in `source` — see
+   *  `event-creation.createEvents`'s own doc comment for the full
+   *  contract, including why a plain insert count sometimes needs
+   *  correcting rather than reading a database driver's own
+   *  affected-row-count directly. */
+  async createEvents(source: string): Promise<InsertStatementResult[]> {
+    return createEvents(this.#db, this.#clock, this.#catalog, source, (stream) =>
       aggregatorNodeIdsForStream(this.#config, stream),
+    );
+  }
+
+  /** Backs event-collectors.md §3.3.1's admin endpoint for one stream —
+   *  schema migration step count, currently stored event count,
+   *  configured aggregator ids, and pending-aggregation counts per
+   *  aggregator (every *configured* aggregator gets a key, `0` if it
+   *  has nothing pending right now, unlike `pendingCountsByAggregator`'s
+   *  own raw return value, which only mentions aggregators that
+   *  currently have at least one pending row). */
+  async streamStats(stream: string): Promise<StreamStats> {
+    const streamConfig = this.#config.streams[stream];
+    if (!streamConfig) {
+      throw new Error(`streamStats: unknown stream "${stream}"`);
+    }
+    const [steps, events, pending] = await Promise.all([
+      migrationStepCount(this.#db, stream),
+      streamEventCount(this.#db, stream),
+      pendingCountsByAggregator(this.#db, stream),
+    ]);
+    const aggregatorNodeIds = streamConfig.aggregators.map((a) => a.nodeId);
+    const pendingByAggregator: Record<number, number> = {};
+    for (const nodeId of aggregatorNodeIds) {
+      pendingByAggregator[nodeId] = pending[nodeId] ?? 0;
+    }
+    return {
+      name: stream,
+      migrationStepCount: steps,
+      eventCount: events,
+      aggregatorNodeIds,
+      pendingByAggregator,
+    };
+  }
+
+  /** `streamStats` for every configured stream — the whole payload
+   *  event-collectors.md §3.3.1's `GET /api/admin` endpoint returns. */
+  async allStreamStats(): Promise<StreamStats[]> {
+    return Promise.all(
+      Object.keys(this.#config.streams).map((stream) => this.streamStats(stream)),
     );
   }
 

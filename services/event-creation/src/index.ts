@@ -2,7 +2,9 @@
 // — implements §2.6.3's "Event Creation" logic directly, wrapping
 // `dml_facade.apply_insert` and `database-repo`. See
 // documentation/plans/architecture/event-store-implementation-plan.md,
-// Phase 9.
+// Phase 9, and
+// documentation/plans/architecture/event-collector-implementation-plan.md,
+// Phase 4, for the per-statement result rework below.
 //
 // The one file in this package allowed to import compiled Gleam output
 // directly — see root CLAUDE.md's "Facades and the TypeScript boundary"
@@ -33,10 +35,44 @@ export class EventCreationError extends Error {
   }
 }
 
+/** One `INSERT` statement's execution result — a `RETURNING` clause
+ *  yields its rows directly; without one, an accurate insert count
+ *  (see `createEvents`'s own doc comment for why that count sometimes
+ *  needs correcting, not just reading off the database driver
+ *  directly). */
+export type InsertStatementResult =
+  | { kind: "rows"; rows: Record<string, unknown>[] }
+  | { kind: "count"; count: number };
+
+interface FacadeStatementResult {
+  sql: string;
+  stream_name: string;
+  has_returning: boolean;
+}
+
 /** Implements event-stores.md §2.6.3: transpiles every `INSERT`
  *  statement in `source` (validated against `catalog`), drawing one
- *  fresh HLC value per row from `clock`, and executes the resulting SQL
- *  — including any `_pending_aggregations` fan-out — via `db`.
+ *  fresh HLC value per row from `clock`, and executes each resulting
+ *  statement individually via `database-repo`'s `execStatement` —
+ *  including any `_pending_aggregations` fan-out — returning one
+ *  `InsertStatementResult` per statement, in order.
+ *
+ *  For a statement with no `RETURNING` clause on a stream that has
+ *  aggregators configured, the executed SQL's own affected-row-count
+ *  is *not* the number of stream rows inserted: `dml_codegen`'s
+ *  generated SQL (see `insert_to_sql`'s own doc comment) ends with the
+ *  `_pending_aggregations` fan-out `INSERT` as its top-level statement
+ *  in that case, and its row count is `(rows inserted) × (aggregator
+ *  count)` — `CROSS JOIN unnest(ARRAY[...])` always produces exactly
+ *  one row per aggregator id per input row, deterministically. Dividing
+ *  by that statement's own aggregator count (looked up here, not
+ *  reported by the Gleam facade — see
+ *  documentation/plans/architecture/event-collector-implementation-plan.md's
+ *  "Decisions carried over from discussion") recovers the exact insert
+ *  count. A statement *with* `RETURNING` never needs this: its
+ *  top-level statement is a plain `SELECT ... FROM ins`, whose row
+ *  count already equals the insert count directly.
+ *
  *  `aggregatorNodeIdsForStream` is typically built by `services/
  *  event-store` from `StreamConfig.aggregators`, excluding any entry
  *  whose `aggregationStrategy.kind === "sharedDatabase"` (that
@@ -48,7 +84,7 @@ export async function createEvents(
   catalog: CatalogHandle,
   source: string,
   aggregatorNodeIdsForStream: (stream: string) => number[],
-): Promise<void> {
+): Promise<InsertStatementResult[]> {
   const resultJson = streamsFacade.apply_insert(
     catalog,
     source,
@@ -59,5 +95,17 @@ export async function createEvents(
   if (!result.ok) {
     throw new EventCreationError(result.error);
   }
-  await db.exec(result.sql);
+
+  const results: InsertStatementResult[] = [];
+  for (const stmt of result.statements as FacadeStatementResult[]) {
+    const { rows, affectedRows } = await db.execStatement(stmt.sql);
+    if (stmt.has_returning) {
+      results.push({ kind: "rows", rows });
+    } else {
+      const aggregatorCount = aggregatorNodeIdsForStream(stmt.stream_name).length;
+      const count = aggregatorCount > 0 ? affectedRows / aggregatorCount : affectedRows;
+      results.push({ kind: "count", count });
+    }
+  }
+  return results;
 }
