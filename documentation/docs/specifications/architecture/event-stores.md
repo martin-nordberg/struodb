@@ -118,8 +118,8 @@ from collectors or other aggregators.
   - The defining StruoQL migration sequence
   - A list of aggregators for the stream by node ID
   - For each aggregator of this stream:
-    o the aggregation strategy
-    o the retention strategy
+    - the aggregation strategy
+    - the retention strategy
 * For each aggregator:
   - The HTTP base endpoint URL for registration and event delivery
 TODO: Define a JSON format for the above
@@ -148,9 +148,9 @@ TODO: Define a JSON format for the above
   - The schema migrations steps of §2.6.1 are completed.
 * For each stream supported by the store:
   - For each aggregator defined for the stream:
-    o The store calls Aggregator Registration to register with the linked
+    - The store calls Aggregator Registration to register with the linked
       aggregator and to retrieve the aggregator's schema for the stream.
-    o The schema migrations steps of §2.6.1 are completed.
+    - The schema migrations steps of §2.6.1 are completed.
 * The containing application begins accepting event creation commands.
 
 ### 2.6.3 Event Creation
