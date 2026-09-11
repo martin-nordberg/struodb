@@ -57,11 +57,13 @@ jobs:
           [
             aggregator-registration,
             database-repo,
+            event-collector-service,
             event-creation,
             event-delivery,
             event-obsolescence,
             event-store,
             hlc-clock,
+            http-event-creation,
             schema-migration,
           ]
     runs-on: ubuntu-latest

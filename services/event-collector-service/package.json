@@ -1,0 +1,17 @@
+{
+  "name": "event-collector-service",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "event-store": "workspace:*",
+    "http-event-creation": "workspace:*"
+  },
+  "scripts": {
+    "prebuild": "bun run --cwd ../.. build:domain",
+    "build": "bun run prebuild && tsc --noEmit",
+    "pretest": "bun run prebuild",
+    "test": "bun test",
+    "start": "bun run prebuild && bun run src/main.ts"
+  }
+}

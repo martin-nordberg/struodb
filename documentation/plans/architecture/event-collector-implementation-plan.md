@@ -16,6 +16,15 @@ collector as a Bun web service, backed by PGLite for its PostgreSQL data
 initially, designed so a later swap to real PostgreSQL touches
 configuration only — never this component's own code or dependencies.
 
+**Status: implemented**, per "Step-by-step build order" below — every
+phase's Gleam/TypeScript code and test suite is in place, `gleam test
+--runtime bun`/`gleam format --check` are green for `domain/streams`,
+and `tsc --noEmit`/`bun test` are green for every `services/*` package
+this plan touches plus `service/`. See "Implementation notes" near the
+end for where reality landed relative to this plan's own "Open
+questions" — several of them turned out to be directly answerable once
+PGLite was actually installed and exercised, rather than staying open.
+
 ## Scope
 
 **In scope**:
@@ -947,6 +956,53 @@ if (import.meta.main) {
    test:services`, then `bun run --cwd service build && bun run --cwd
    service test` — matching root `CLAUDE.md`'s CI expectations.
 
+## Implementation notes (how this actually landed)
+
+Written after building the plan above end to end — per
+`documentation/plans/lang/migration-plan.md`'s own "Implementation
+notes" precedent.
+
+- **PGLite's actual API (version 0.5.8, installed and exercised for
+  real) matches this plan's design exactly, no surprises.** Its
+  `Results<T>` type is `{ rows, affectedRows?, command?, rowCount?,
+  fields, blob? }` — confirmed by reading the package's own shipped
+  `.d.ts`, not assumed — so `PGliteClient.execStatement`'s `{ rows:
+  result.rows, affectedRows: result.affectedRows ?? result.rows.length
+  }` needed no adjustment. `database-repo`'s own test suite
+  (`test/pglite-client.test.ts`, `test/admin-stats.test.ts`) runs
+  against real in-memory `PGlite` instances, not fakes, and this
+  closes what this plan's own "Open questions" originally flagged as
+  unverified PGLite `exec()`/`query()` behavior.
+- **The aggregator-count division correction is verified against a
+  real Postgres engine, not just arithmetic.**
+  `event-creation/test/index.test.ts`'s "2 aggregators, no RETURNING, 3
+  rows" test asserts both the corrected count (`3`) *and* the real
+  row count actually sitting in `_pending_aggregations` afterward
+  (`6`) — the exact discrepancy the correction exists to paper over,
+  observed directly rather than inferred.
+- **A real process-level smoke test was added after all**
+  (`event-collector-service/test/smoke.test.ts`) — this plan's own
+  "Open questions" originally expected this to stay unverified for the
+  same "no environment to run a real deployable in" reason
+  `event-store-implementation-plan.md` cited for its own equivalent
+  gap. PGLite changed that calculus: the test spawns the actual
+  `main.ts` against a real config file and a real (in-memory) database,
+  hits `/api/events` and `/api/admin` over real HTTP, sends a real
+  `SIGTERM`, and asserts a clean exit — no live Postgres or aggregator
+  needed for any of it.
+- **`event-creation` and `event-store`'s hand-rolled
+  `fake-database-client.ts` files were deleted, not just left
+  alongside new PGLite-based tests** — once every test in both
+  packages could run against a real embedded database, the fakes had
+  no remaining callers; keeping unreachable test fixtures around
+  contradicts this codebase's own established discipline (see
+  `documentation/plans/lang/migration-plan.md`'s `EmptyMigration`
+  precedent, cited again here since it applies just as directly).
+  `schema-migration`/`event-delivery`/`event-obsolescence`'s own fakes
+  are untouched — those packages weren't modified by this plan, so
+  their existing test strategy stays as-is; upgrading them to real
+  PGLite too is a reasonable future pass, not done here.
+
 ## Open questions
 
 - **Heterogeneous response array shape.** event-collectors.md's own
@@ -958,21 +1014,13 @@ if (import.meta.main) {
   bare number mixed in among arrays. Worth confirming this reading is
   acceptable, or whether the doc actually wants a bare number.
 - **`Bun.SQL`'s exact `affectedRows`/`count` field name and behavior
-  for `INSERT`/`INSERT ... RETURNING`/multi-row `INSERT`** is asserted
-  from static analysis of the installed Bun 1.4 binary (`grep`-level
-  confirmation that `SQLResultArray` carries both `count` and
-  `affectedRows`), not from running a real query against a real
-  Postgres — there is none available in this environment. Confirm
-  against a real connection before trusting `BunSqlClient
-  .execStatement` in production; Phase 2's fallback chain
-  (`affectedRows ?? count ?? length`) is a hedge, not a verified
-  answer.
-- **PGLite's multi-statement `exec()` semantics** (used by `exec()`
-  for schema migration's batched `CREATE TABLE`s) are assumed to mirror
-  its documented behavior; verify against the pinned version rather
-  than trusting this plan's description of it.
-- **No smoke test exercises `event-collector-service` as an actual
-  running process** (spawn, real HTTP request, `SIGTERM`, clean exit) —
-  every piece is unit-tested, but the composition itself isn't, for
-  the same "no environment to run a real deployable in" reason the
-  event-store plan already noted for its own equivalent gap.
+  for `INSERT`/`INSERT ... RETURNING`/multi-row `INSERT`** is still
+  asserted only from static analysis of the installed Bun 1.4 binary
+  (`grep`-level confirmation that `SQLResultArray` carries both `count`
+  and `affectedRows`, not part of its public `.d.ts`), not from running
+  a real query against a real Postgres — there is still none available
+  in this environment (unlike the PGLite side, this one couldn't be
+  resolved the same way). Confirm against a real connection before
+  trusting `BunSqlClient.execStatement` in production; Phase 2's
+  fallback chain (`affectedRows ?? count ?? length`) is a hedge, not a
+  verified answer, for this backend specifically.

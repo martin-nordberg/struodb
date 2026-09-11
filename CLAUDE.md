@@ -343,13 +343,23 @@ implementing the Event Store components in
 `documentation/docs/specifications/architecture/event-stores.md`
 §2.4/§2.7 — `services/hlc-clock` (the `HlcClock` class, above),
 `services/database-repo` (the one package that actually talks to
-PostgreSQL, via `Bun.SQL`), and more per
-`documentation/plans/architecture/event-store-implementation-plan.md`'s
-own phases as they land. `service/` (singular) does not depend on any of
-these except `hlc-clock` — it stays the throwaway smoke-test app it
-already was; a real event-collector/event-aggregator process that
-composes them is future work the implementation plan itself scopes out
-(see its "Scope").
+PostgreSQL — `Bun.SQL` for a real connection, or an embedded PGLite
+instance for `pglite://`-scheme URLs, dispatched purely by
+`connect()`; see
+`documentation/plans/architecture/event-collector-implementation-plan.md`),
+`services/schema-migration`, `services/event-creation`,
+`services/aggregator-registration`, `services/event-delivery`,
+`services/event-obsolescence`, and the composite `services/event-store`
+— all per
+`documentation/plans/architecture/event-store-implementation-plan.md`.
+On top of those, `services/http-event-creation` (a Hono app —
+event-collectors.md §3.3.1's StruoQL-over-HTTP) and
+`services/event-collector-service` (the actual standalone deployable —
+§3.3.2) implement the first real event-collector process, per
+`documentation/plans/architecture/event-collector-implementation-plan.md`.
+`service/` (singular) does not depend on any of these except
+`hlc-clock` — it stays the throwaway smoke-test app it already was;
+`event-collector-service` is the real one now.
 
 ### Logging and errors
 
