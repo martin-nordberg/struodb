@@ -17,7 +17,7 @@ from collectors or other aggregators.
   aggregations. CREATE STREAM transpilation needs expansion to something like:
   ```
   -- Existing
-  CREATE TABLE <stream name> ...
+  CREATE TABLE {stream name} ...
   
   -- New
   CREATE TABLE _struo_<stream_name>_migration_history(
@@ -27,7 +27,7 @@ from collectors or other aggregators.
     
   CREATE TABLE _struo_<stream_name>_pending_aggregations (
     aggregator_node_id INTEGER NOT NULL,
-    event_hlc CHAR(15) NOT NULL REFERENCES <stream name>(_struo_hlc) ON DELETE CASCADE,
+    event_hlc CHAR(15) NOT NULL REFERENCES {stream name}(_struo_hlc) ON DELETE CASCADE,
     PRIMARY KEY (aggregator_node_id, event_hlc)
   );
   ```
@@ -39,7 +39,7 @@ from collectors or other aggregators.
 * In dml_spec.md and associated code, StruoQL INSERT transpilation needs to be
   passed an additional parameter, a list of integer aggregator node IDs.
   The output SQL INSERT needs to be expanded to insert records
-  into _struo_<stream name>_pending_aggregations along with the existing
+  into _struo_{stream name}_pending_aggregations along with the existing
   stream insertions, one pending record for every event and aggregator
   combination.
 
