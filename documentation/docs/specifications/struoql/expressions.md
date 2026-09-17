@@ -121,4 +121,4 @@ open details."
 
 ## 3.5 Grammar Diagrams
 
-- <a href="/x-specifications/struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>
+- <a href="/struodb/x-specifications/struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>

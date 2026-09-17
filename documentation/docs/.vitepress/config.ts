@@ -4,9 +4,10 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: "StruoDB Documentation",
   description: "Documentation for StruoDB architecture, implementation, and usage.",
+  base: "/struodb/",
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
-    ['link', { rel: 'icon', href: '/favicon.ico', sizes: 'any' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/struodb/favicon.svg' }],
+    ['link', { rel: 'icon', href: '/struodb/favicon.ico', sizes: 'any' }],
   ],
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config

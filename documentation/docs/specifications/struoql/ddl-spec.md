@@ -457,4 +457,4 @@ bound, 90 instead of 100, as required by §4.4.5.)
 
 ## 4.5 Grammar Diagrams
 
-- <a href="/x-specifications/struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>
+- <a href="/struodb/x-specifications/struoql/grammar-railroad.html" target="_blank">Grammar Railroad Diagrams</a>
